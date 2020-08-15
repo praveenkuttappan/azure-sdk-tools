@@ -205,8 +205,7 @@ class FunctionNode(NodeEntityBase):
     def _parse_typehint(self):
 
         # Skip parsing typehint if typehint is not expected for e.g dunder or async methods
-        # and if return type is already found
-        if self.return_type and not is_typehint_mandatory(self.name) or self.is_async:
+        if not is_typehint_mandatory(self.name) or self.is_async:
             return
 
         # Parse type hint to get return type and types for positional args
