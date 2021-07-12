@@ -359,16 +359,15 @@ namespace APIViewWeb.Respositories
             return lastRevisionTextLines.SequenceEqual(fileTextLines);
         }
 
-        public async Task<ReviewRevisionModel> CreateMasterReviewAsync(ClaimsPrincipal user, string originalName, string label, Stream fileStream, bool compareAllRevisions)
+        public async Task<ReviewModel> CreateMasterReviewAsync(ClaimsPrincipal user, string originalName, string label, Stream fileStream, bool runAnalysis)
         {
             //Generate code file from new uploaded package
             using var memoryStream = new MemoryStream();
-            var codeFile = await CreateCodeFile(originalName, fileStream, false, memoryStream);
+            var codeFile = await CreateCodeFile(originalName, fileStream, runAnalysis, memoryStream);
 
             //Get current master review for package and language
             var review = await _reviewsRepository.GetMasterReviewForPackageAsync(codeFile.Language, codeFile.PackageName);
             bool createNewRevision = true;
-            ReviewRevisionModel reviewRevision = null;
             if (review != null)
             {
                 // Delete pending revisions if it is not in approved state before adding new revision
@@ -381,23 +380,10 @@ namespace APIViewWeb.Respositories
                 }
 
                 var renderedCodeFile = new RenderedCodeFile(codeFile);
-                // We should compare against only latest revision when calling this API from scheduled CI runs
-                // But any manual pipeline run at release time should compare against all approved revisions to ensure hotfix release doesn't have API change
-                // If review surface doesn't match with any approved revisions then we will create new revision if it doesn't match pending latest revision
-                if (compareAllRevisions)
+                var noDiffFound = await IsReviewSame(review.Revisions.LastOrDefault(), renderedCodeFile);
+                if (noDiffFound)
                 {
-                    foreach (var approvedRevision in review.Revisions.Where(r => r.IsApproved).Reverse())
-                    {
-                        if (await IsReviewSame(approvedRevision, renderedCodeFile))
-                        {
-                            return approvedRevision;
-                        }
-                    }
-                }
-
-                if (await IsReviewSame(lastRevision, renderedCodeFile))
-                {
-                    reviewRevision = lastRevision;
+                    // No change is detected from last revision so no need to update this revision
                     createNewRevision = false;
                 }
             }
@@ -408,7 +394,7 @@ namespace APIViewWeb.Respositories
                 {
                     Author = user.GetGitHubLogin(),
                     CreationDate = DateTime.UtcNow,
-                    RunAnalysis = false,
+                    RunAnalysis = runAnalysis,
                     Name = originalName,
                     IsAutomatic = true
                 };
@@ -419,17 +405,17 @@ namespace APIViewWeb.Respositories
             if (createNewRevision)
             {
                 // Update or insert review with new revision
-                reviewRevision = new ReviewRevisionModel()
+                var revision = new ReviewRevisionModel()
                 {
                     Author = user.GetGitHubLogin(),
                     Label = label
                 };
-                var reviewCodeFileModel = await CreateReviewCodeFileModel(reviewRevision.RevisionId, memoryStream, codeFile);
+                var reviewCodeFileModel = await CreateReviewCodeFileModel(revision.RevisionId, memoryStream, codeFile);
                 reviewCodeFileModel.FileName = originalName;
-                reviewRevision.Files.Add(reviewCodeFileModel);
-                review.Revisions.Add(reviewRevision);
+                revision.Files.Add(reviewCodeFileModel);
+                review.Revisions.Add(revision);
             }
-
+            
             // Check if review can be marked as approved if another review with same surface level is in approved status
             if (review.Revisions.Last().Approvers.Count() == 0)
             {
@@ -443,7 +429,7 @@ namespace APIViewWeb.Respositories
                 }
             }
             await _reviewsRepository.UpsertReviewAsync(review);
-            return reviewRevision;
+            return review;
         }
 
         private async Task AssertAutomaticReviewModifier(ClaimsPrincipal user, ReviewModel reviewModel)
