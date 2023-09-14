@@ -16,6 +16,7 @@ using APIViewWeb.Repositories;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.CodeAnalysis;
 using Microsoft.Extensions.Configuration;
 
 
@@ -450,9 +451,25 @@ namespace APIViewWeb.Pages.Assemblies
                             documentedByLines.ToArray()
                         );
                         documentedByLines.Clear();
+                        ProcessCodeLine(line, c);
                         return c;
                     }
                 }).ToArray();
+        }
+        
+        private void ProcessCodeLine(CodeLine line, CodeLineModel parent)
+        {
+            foreach (var childLine in line.children)
+            {
+                CodeLineModel c = new CodeLineModel(
+                            DiffLineKind.Unchanged,
+                            childLine,
+                            null,
+                            null,
+                            childLine.LineNumber ?? 0);
+                parent.children.Add(c);
+                ProcessCodeLine(childLine, c);
+            }
         }
 
         private int ComputeActiveConversations(CodeLine[] lines, ReviewCommentsModel comments)

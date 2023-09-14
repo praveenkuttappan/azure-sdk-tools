@@ -26,6 +26,7 @@ namespace APIViewWeb.Models
             OtherLineSectionKey = otherLineSectionKey;
             HeadingsOfSectionsWithDiff = headingsOfSectionsWithDiff ?? new HashSet<int>();
             IsSubHeadingWithDiffInSection = isSubHeadingWithDiffInSection;
+            children = new List<CodeLineModel>();
         }
 
         public CodeLineModel(CodeLineModel codeLineModel, DiffLineKind kind = DiffLineKind.Unchanged, CodeLine codeLine = default(CodeLine),
@@ -44,6 +45,7 @@ namespace APIViewWeb.Models
             OtherLineSectionKey = otherLineSectionKey ?? codeLineModel.OtherLineSectionKey;
             HeadingsOfSectionsWithDiff = headingsOfSectionsWithDiff ?? codeLineModel.HeadingsOfSectionsWithDiff;
             IsSubHeadingWithDiffInSection = (!isSubHeadingWithDiffInSection) ? codeLineModel.IsSubHeadingWithDiffInSection : isSubHeadingWithDiffInSection;
+            children = new List<CodeLineModel>();
         }
 
         public CodeLine CodeLine { get; }
@@ -57,5 +59,6 @@ namespace APIViewWeb.Models
         public int? OtherLineSectionKey { get; }
         public HashSet<int> HeadingsOfSectionsWithDiff { get; }
         public bool IsSubHeadingWithDiffInSection { get; }
+        public List<CodeLineModel> children { get; } = new List<CodeLineModel>();
     }
 }

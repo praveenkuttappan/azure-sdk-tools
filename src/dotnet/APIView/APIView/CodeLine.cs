@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using APIView.Model;
 
 namespace ApiView
@@ -14,6 +15,7 @@ namespace ApiView
         public bool IsDocumentation { get; }
         public TreeNode<CodeLine> NodeRef { get; }
         public bool IsHiddenApi { get; }
+        public List<CodeLine> children { get; } = new List<CodeLine> ();
 
         public CodeLine(string html, string id, string lineClass, int? lineNumber = null, int? sectionKey = null, int indent = 0, bool isDocumentation = false, TreeNode<CodeLine> nodeRef = null, bool isHiddenApi = false)
         {
@@ -26,6 +28,7 @@ namespace ApiView
             this.IsDocumentation = isDocumentation;
             this.NodeRef = nodeRef;
             this.IsHiddenApi = isHiddenApi;
+            this.children = new List<CodeLine> ();
         }
 
         public CodeLine(CodeLine codeLine, string html = null, string id = null, string lineClass = null, int? lineNumber = null, int? sectionKey = null, int indent = 0, bool isDocumentation = false, TreeNode<CodeLine> nodeRef = null, bool isHiddenApi = false)
@@ -39,6 +42,7 @@ namespace ApiView
             this.IsDocumentation = (isDocumentation != false)? isDocumentation : codeLine.IsDocumentation;
             this.NodeRef = nodeRef ?? codeLine.NodeRef;
             this.IsHiddenApi = isHiddenApi;
+            this.children = new List<CodeLine>();
         }
 
         public override string ToString()
@@ -48,7 +52,17 @@ namespace ApiView
 
         public bool Equals(CodeLine other)
         {
-            return DisplayString == other.DisplayString && ElementId == other.ElementId && other.IsHiddenApi == IsHiddenApi;
+            bool isEquals = DisplayString == other.DisplayString && other.IsHiddenApi == IsHiddenApi;
+            if(isEquals && children.Count == other.children.Count)
+            {
+                for (int i = 0; i < children.Count; i++)
+                {
+                    if (!children[i].Equals(other.children[i]))
+                        return false;
+                }
+                return true;
+            }
+            return false;
         }
     }
 }

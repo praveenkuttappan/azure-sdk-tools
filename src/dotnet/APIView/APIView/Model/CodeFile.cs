@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using APIView;
+using APIView.Model.V2;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -50,9 +51,15 @@ namespace ApiView
 
         public List<CodeFileToken[]> LeafSections { get; set; }
 
-        public NavigationItem[] Navigation { get; set; }
+        public NavigationItem[] Navigation { get; set; } = new NavigationItem[0];
 
-        public CodeDiagnostic[] Diagnostics { get; set; }
+        public CodeDiagnostic[] Diagnostics { get; set; } = new CodeDiagnostic[0];
+        public string ContextBeginLiteral { get; set; } = "{";
+        public string ContextEndLiteral { get; set; } = "}";
+        public List<string> ReviewHeaders { get; set; } = new();
+        public List<NamespaceNode> Namespaces { get; set; } = new ();
+
+        public bool IsTreeBased = true;
 
         public override string ToString()
         {

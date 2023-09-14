@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using ApiView;
 using APIView.DIff;
 using APIView.Model;
+using APIView.Renderers;
 
 namespace APIViewWeb.Models
 {
@@ -32,6 +33,11 @@ namespace APIViewWeb.Models
 
         public CodeLine[] Render(bool showDocumentation)
         {
+            if(CodeFile.IsTreeBased)
+            {
+                RenderResult = CodeFileHtmlTreeRenderer.Normal.Render(CodeFile, showDocumentation: true);
+                return RenderResult.CodeLines;
+            }
             //Always render when documentation is requested to avoid cach thrashing
             if (showDocumentation)
             {

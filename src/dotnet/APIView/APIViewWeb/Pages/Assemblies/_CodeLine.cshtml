@@ -230,7 +230,7 @@
 {
     <partial name="_CodeLinePartial" model="@sectionKey" />
 }
-@if (Model.Diagnostics.Any())
+@if (Model.Diagnostics != null && Model.Diagnostics.Any())
 {
     var errorDiags = Model.Diagnostics.Where(d => d.Level == APIView.CodeDiagnosticLevel.Default || d.Level == APIView.CodeDiagnosticLevel.Error);
     var warningDiags = Model.Diagnostics.Where(d => d.Level == APIView.CodeDiagnosticLevel.Warning);
@@ -257,4 +257,12 @@
 @if (Model.CommentThread != null)
 {
     <partial name="_CommentThreadPartial" model="@Model.CommentThread" />
+}
+
+@if(Model.children.Count > 0)
+{
+    foreach( var m in Model.children)
+    {
+        <partial name="_CodeLine" model="@m" />
+    }   
 }
