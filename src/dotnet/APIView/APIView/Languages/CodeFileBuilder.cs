@@ -11,6 +11,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Linq;
+using System.Text;
 
 namespace ApiView
 {
@@ -107,12 +108,7 @@ namespace ApiView
 
                     foreach (var namedTypeSymbol in SymbolOrderProvider.OrderTypes(namespaceSymbol.GetTypeMembers()))
                     {
-                        //BuildType(builder, namedTypeSymbol, namespaceItems, isHidden);
-                        var typeNode = new ClassNode()
-                        {
-                            Name = namedTypeSymbol.Name,
-                            AccessType = "public"                            
-                        };
+                        var typeNode = BuildType(namedTypeSymbol, null, false);
                         namespaceNode.Classes.Add(typeNode);
                     }
                     node.Namespaces.Add(namespaceNode);
@@ -326,7 +322,7 @@ namespace ApiView
                     }
                 }
 
-                //BuildMember(builder, member, inHiddenScope);
+                typeNode.Methods.Add(BuildMember(member, inHiddenScope));
             }
 
             //CloseBrace(builder);
@@ -415,7 +411,7 @@ namespace ApiView
             builder.NewLine();
         }
 
-        private void BuildMember(CodeFileTokensBuilder builder, ISymbol member, bool inHiddenScope)
+        private MethodNode BuildMember(ISymbol member, bool inHiddenScope)
         {
             var memberNode = new MethodNode();
             bool isHidden = IsHiddenFromIntellisense(member);
@@ -429,22 +425,11 @@ namespace ApiView
             BuildAttributes(memberNode, member.GetAttributes());
 
             //builder.WriteIndent();
-            NodeFromSymbol(builder, member);
+            //NodeFromSymbol(builder, member);
+            memberNode.Qualifiers.Add(GetSymbolAccessibility(member));
+            memberNode.Name = GetSymbolDisplayName(member);
 
-            /*if (member.Kind == SymbolKind.Field && member.ContainingType.TypeKind == TypeKind.Enum)
-            {
-                builder.Punctuation(SyntaxKind.CommaToken);
-            }
-            else if (member.Kind != SymbolKind.Property)
-            {
-                builder.Punctuation(SyntaxKind.SemicolonToken);
-            }
-
-            builder.NewLine();
-            if (isHidden && !inHiddenScope)
-            {
-                builder.Append(null, CodeFileTokenKind.HiddenApiRangeEnd);
-            }*/
+            return memberNode;
         }
 
         private void BuildAttributes(NodeBase node, ImmutableArray<AttributeData> attributes)
@@ -604,6 +589,21 @@ namespace ApiView
                 builder.Append(MapToken(definedSymbol, symbolDisplayPart));
             }
         }
+
+        private string GetSymbolAccessibility(ISymbol symbol, ISymbol definedSymbol = null)
+        {
+            return SyntaxFacts.GetText(ToEffectiveAccessibility(symbol.DeclaredAccessibility));
+        }
+        private string GetSymbolDisplayName(ISymbol symbol, ISymbol definedSymbol = null)
+        {
+            StringBuilder sb = new StringBuilder();
+            foreach (var symbolDisplayPart in symbol.ToDisplayParts(_defaultDisplayFormat))
+            {
+                sb.Append(symbolDisplayPart.ToString()).Append(' ');
+            }
+            return sb.ToString();
+        }
+
 
         private bool NeedsAccessibility(ISymbol symbol)
         {
