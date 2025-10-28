@@ -398,6 +398,8 @@ namespace Azure.Sdk.Tools.Cli.Tools.ReleasePlan
                     {
                         Message = "Release plan is being created",
                         Result = releasePlan,
+                        SdkType = isMgmt ? "mgmt" : "client",
+                        TypeSpecProject = typeSpecHelper.GetTypeSpecProjectName(typeSpecProjectPath),
                         NextSteps = [$"Get release plan from `workItem`, work item value: {releasePlan.WorkItemId}"]
                     };
                 }

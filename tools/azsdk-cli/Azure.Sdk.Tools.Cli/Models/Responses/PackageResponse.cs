@@ -14,8 +14,6 @@ namespace Azure.Sdk.Tools.Cli.Models.Responses
         public string Name { get; set; } = string.Empty;
         [JsonPropertyName("Version")]
         public string Version { get; set; } = string.Empty;
-        [JsonPropertyName("Language")]
-        public string Language { get; set; } = string.Empty;
         [JsonPropertyName("Package display name")]
         public string DisplayName { get; set; } = string.Empty;
         [JsonPropertyName("Package type")]

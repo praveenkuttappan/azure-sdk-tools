@@ -44,6 +44,34 @@ public abstract class CommandResponse
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? NextSteps { get; set; }
 
+    /// <summary>
+    /// Language indicates the SDK language context of the response, if applicable.    
+    /// </summary>
+    [JsonPropertyName("language")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string Language { get; set; } = "";
+
+    /// <summary>
+    /// Package provides the SDK package name in the context of the response, if applicable.    
+    /// </summary>
+    [JsonPropertyName("package")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string PackageName { get; set; } = "";
+
+    /// <summary>
+    /// TypeSpecProject represents the TypeSpec project name related to the response, if applicable.
+    /// </summary>
+    [JsonPropertyName("typeSpecProject")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string TypeSpecProject { get; set; } = "";
+
+    /// <summary>
+    /// SdkType indicates whether the tool call is for management plane or data plane, if applicable.    
+    /// </summary>
+    [JsonPropertyName("sdkType")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string SdkType { get; set; } = ""; //client or mgmt
+
     protected abstract string Format();
 
     public override string ToString()

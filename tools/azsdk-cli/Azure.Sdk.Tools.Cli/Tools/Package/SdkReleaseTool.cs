@@ -53,7 +53,6 @@ namespace Azure.Sdk.Tools.Cli.Tools.Package
             {
                 SdkReleaseResponse response = new()
                 {
-                    PackageName = packageName,
                     Language = language
                 };
 
@@ -78,6 +77,7 @@ namespace Azure.Sdk.Tools.Cli.Tools.Package
                     isValidParams = false;
                 }
 
+                response.PackageName = package?.PackageName ?? packageName;
                 if (string.IsNullOrEmpty(package?.PipelineDefinitionUrl))
                 {
                     response.ReleaseStatusDetails += $"No release pipeline found for package '{packageName}' in language '{language}'. Please check the package name and language.";

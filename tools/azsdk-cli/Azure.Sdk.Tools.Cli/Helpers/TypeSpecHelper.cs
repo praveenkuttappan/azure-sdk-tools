@@ -28,6 +28,7 @@ namespace Azure.Sdk.Tools.Cli.Helpers
 
         public string GetSpecRepoRootPath(string path);
         public string GetTypeSpecProjectRelativePath(string typeSpecProjectPath);
+        public string GetTypeSpecProjectName(string typeSpecProjectPath);
     }
     public partial class TypeSpecHelper : ITypeSpecHelper
     {
@@ -101,6 +102,16 @@ namespace Azure.Sdk.Tools.Cli.Helpers
 
             int specIndex = typeSpecProjectPath.IndexOf("specification");
             return specIndex >= 0 ? typeSpecProjectPath[specIndex..].Replace("\\", "/") : string.Empty;
+        }
+
+        public string GetTypeSpecProjectName(string typeSpecProjectPath)
+        {
+            if (string.IsNullOrEmpty(typeSpecProjectPath) || !IsValidTypeSpecProjectPath(typeSpecProjectPath))
+            {
+                return string.Empty;
+            }
+            var typeSpecObject = TypeSpecProject.ParseTypeSpecConfig(typeSpecProjectPath);
+            return typeSpecObject?.Name ?? string.Empty;
         }
     }
 }

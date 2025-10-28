@@ -92,7 +92,13 @@ namespace Azure.Sdk.Tools.Cli.Tools.TypeSpec
                 {
                     validationResults.Add($"Error: {ex.Message}");
                 }
-                return new() { Result = validationResults };
+                var typeSpecProject = TypeSpecProject.ParseTypeSpecConfig(typeSpecProjectRootPath);
+                return new()
+                {
+                    Result = validationResults,
+                    TypeSpecProject = typeSpecProject.Name,
+                    SdkType = typeSpecProject.SdkType
+                };
             }
             catch (Exception ex)
             {
