@@ -7,19 +7,30 @@ using Azure.Sdk.Tools.Cli.Helpers;
 using Azure.Sdk.Tools.Cli.Models;
 using Azure.Sdk.Tools.Cli.Models.Responses.Package;
 using Azure.Sdk.Tools.Cli.Services;
-using System.Threading.Tasks;
+using Azure.Sdk.Tools.Cli.Services.Languages;
+using Azure.Sdk.Tools.Cli.Tools.Core;
 
 namespace Azure.Sdk.Tools.Cli.Tools.Package
 {
     [McpServerToolType, Description("This type contains the tools to build/compile SDK code locally.")]
-    public class SdkBuildTool(
-        IGitHelper gitHelper,
-        ILogger<SdkBuildTool> logger,
-        IProcessHelper processHelper,
-        ISpecGenSdkConfigHelper specGenSdkConfigHelper,
-        ILanguageSpecificResolver<IPackageInfoHelper> packageInfoResolver
-    ) : MCPTool
+    public class SdkBuildTool : LanguageMcpTool
     {
+        // Fields to hold constructor parameters
+        private readonly IProcessHelper processHelper;
+        private readonly ISpecGenSdkConfigHelper specGenSdkConfigHelper;
+
+        public SdkBuildTool(
+            IGitHelper gitHelper,
+            ILogger<SdkBuildTool> logger,
+            IProcessHelper processHelper,
+            ISpecGenSdkConfigHelper specGenSdkConfigHelper,
+            IEnumerable<LanguageService> languageServices
+        ) : base(languageServices, gitHelper, logger)
+        {
+            this.processHelper = processHelper;
+            this.specGenSdkConfigHelper = specGenSdkConfigHelper;
+        }
+
         public override CommandGroup[] CommandHierarchy { get; set; } = [SharedCommandGroups.Package, SharedCommandGroups.SourceCode];
 
         // Command names
@@ -111,10 +122,10 @@ namespace Azure.Sdk.Tools.Cli.Tools.Package
             PackageInfo? packageInfo = null;
             try
             {
-                var packageInfoHelper = await packageInfoResolver.Resolve(packagePath, ct);
-                if (packageInfoHelper != null)
+                var languageService = GetLanguageService(packagePath);
+                if (languageService != null)
                 {
-                    packageInfo = await packageInfoHelper.ResolvePackageInfo(packagePath, ct);
+                    packageInfo = await languageService.GetPackageInfo(packagePath, ct);
                 }
                 else
                 {

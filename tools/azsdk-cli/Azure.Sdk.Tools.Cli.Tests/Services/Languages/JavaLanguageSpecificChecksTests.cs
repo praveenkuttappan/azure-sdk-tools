@@ -1,5 +1,7 @@
 using Azure.Sdk.Tools.Cli.Helpers;
+using Azure.Sdk.Tools.Cli.Microagents;
 using Azure.Sdk.Tools.Cli.Services;
+using Azure.Sdk.Tools.Cli.Services.Languages;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -9,7 +11,7 @@ namespace Azure.Sdk.Tools.Cli.Tests.Services.Languages
     {
         private string JavaPackageDir { get; set; }
         private Mock<IProcessHelper> MockProcessHelper { get; set; }
-        private JavaLanguageSpecificChecks LangService { get; set; }
+        private JavaLanguageService LangService { get; set; }
 
         [SetUp]
         public void SetUp()
@@ -20,11 +22,13 @@ namespace Azure.Sdk.Tools.Cli.Tests.Services.Languages
                 "TestAssets", "Java");
 
             MockProcessHelper = new Mock<IProcessHelper>();
-
-            LangService = new JavaLanguageSpecificChecks(
+            var gitHelperMock = new Mock<IGitHelper>();
+            gitHelperMock.Setup(g => g.GetRepoName(It.IsAny<string>())).Returns("azure-sdk-for-java");
+            LangService = new JavaLanguageService(
                 MockProcessHelper.Object,
                 new Mock<IGitHelper>().Object,
-                NullLogger<JavaLanguageSpecificChecks>.Instance,
+                new Mock<IMicroagentHostService>().Object,
+                NullLogger<JavaLanguageService>.Instance,
                 new Mock<ICommonValidationHelpers>().Object);
         }
 
