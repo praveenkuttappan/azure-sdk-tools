@@ -139,16 +139,16 @@ public partial class GoLanguageService : LanguageService
         return await commonValidationHelpers.ValidateChangelog(packageName, packagePath, fixCheckErrors, cancellationToken);
     }
 
-    public async Task<bool> RunAllTests(string packagePath, CancellationToken ct = default)
+    public override async Task<bool> RunAllTests(string packagePath, CancellationToken ct = default)
     {
         try
         {
-            var result = await _processHelper.Run(new ProcessOptions(compilerName, ["test", "-v", "-timeout", "1h", "./..."], compilerNameWindows, ["test", "-v", "-timeout", "1h", "./..."], workingDirectory: packagePath), ct);
+            var result = await processHelper.Run(new ProcessOptions(compilerName, ["test", "-v", "-timeout", "1h", "./..."], compilerNameWindows, ["test", "-v", "-timeout", "1h", "./..."], workingDirectory: packagePath), ct);
             return result.ExitCode == 0;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "{MethodName} failed with an exception", nameof(RunAllTests));
+            logger.LogError(ex, "{MethodName} failed with an exception", nameof(RunAllTests));
             return false;
         }
     }
