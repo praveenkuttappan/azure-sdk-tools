@@ -23,10 +23,12 @@ namespace Azure.Sdk.Tools.Cli.Services.Languages
 
         public abstract SdkLanguage Language { get; }
         public virtual bool IsTspClientupdatedSupported => false;
+#pragma warning disable CS1998
         public async virtual Task<PackageInfo> GetPackageInfo(string packagePath, CancellationToken cancellationToken = default)
         {
             throw new NotImplementedException("GetPackageInfo is not implemented for this language.");
         }
+#pragma warning restore CS1998
 
         /// <summary>
         /// Analyzes dependencies for the specific package.
