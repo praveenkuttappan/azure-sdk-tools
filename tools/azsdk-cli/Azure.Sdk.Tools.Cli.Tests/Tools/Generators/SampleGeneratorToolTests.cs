@@ -506,7 +506,7 @@ public class SampleGeneratorToolTests
             Assert.That(_outputHelper.Outputs.Count, Is.GreaterThan(0));
         });
         var error = _outputHelper.Outputs.FirstOrDefault(o => o.Stream == OutputHelper.StreamType.Stdout || o.Stream == OutputHelper.StreamType.Stderr).Output;
-        Assert.That(error, Does.Contain("No git repository found"));
+        Assert.That(error, Does.Contain("Unable to determine language for package"));
     }
 
     [Test]

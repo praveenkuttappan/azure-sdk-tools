@@ -23,9 +23,13 @@ public sealed partial class DotnetLanguageService: LanguageService
         IPowershellHelper powershellHelper,
         IGitHelper gitHelper,        
         ILogger<LanguageService> logger,
-        ICommonValidationHelpers commonValidationHelpers): base(processHelper, gitHelper, logger, commonValidationHelpers)
+        ICommonValidationHelpers commonValidationHelpers)
     {
         this.powershellHelper = powershellHelper;
+        base.processHelper = processHelper;
+        base.gitHelper = gitHelper;
+        base.logger = logger;
+        base.commonValidationHelpers = commonValidationHelpers;
     }
 
     public override SdkLanguage Language { get; } = SdkLanguage.DotNet;

@@ -22,8 +22,7 @@ public class TspClientUpdateToolAutoTests
     }
 
     // Language service that produces no API changes and no customizations
-    private class MockNoChangeLanguageService(IProcessHelper processHelper, IGitHelper gitHelper, ILogger<LanguageService> logger, ICommonValidationHelpers commonValidationHelpers) : 
-        LanguageService (processHelper, gitHelper, logger, commonValidationHelpers)
+    private class MockNoChangeLanguageService : LanguageService
     {
         public override SdkLanguage Language { get; } = SdkLanguage.Java;
         public override bool IsTspClientupdatedSupported => true;
@@ -35,8 +34,7 @@ public class TspClientUpdateToolAutoTests
     }
 
     // Language service that has customizations and successful patch application
-    private class MockChangeLanguageService(IProcessHelper processHelper, IGitHelper gitHelper, ILogger<LanguageService> logger, ICommonValidationHelpers commonValidationHelpers) :
-        LanguageService(processHelper, gitHelper, logger, commonValidationHelpers)
+    private class MockChangeLanguageService : LanguageService
     {
         public override SdkLanguage Language { get; } = SdkLanguage.Java;
         public override bool IsTspClientupdatedSupported => true;
@@ -60,7 +58,7 @@ public class TspClientUpdateToolAutoTests
         var processHelper = new Mock<IProcessHelper>();
         var logger = new TestLogger<LanguageService>();
         var commonValidationHelper = new Mock<ICommonValidationHelpers>();
-        var svc = new MockNoChangeLanguageService(processHelper.Object, gitHelper.Object, logger, commonValidationHelper.Object);
+        var svc = new MockNoChangeLanguageService();
         var tsp = new MockTspHelper();
         gitHelper.Setup(g => g.GetRepoName(It.IsAny<string>())).Returns("azure-sdk-for-java");
         var tool = new TspClientUpdateTool(new NullLogger<TspClientUpdateTool>(), [svc], gitHelper.Object, tsp);
@@ -75,10 +73,7 @@ public class TspClientUpdateToolAutoTests
     public async Task Auto_WithCustomizations_AppliedSuccessfully()
     {
         var gitHelper = new Mock<IGitHelper>();
-        var processHelper = new Mock<IProcessHelper>();
-        var logger = new TestLogger<LanguageService>();
-        var commonValidationHelper = new Mock<ICommonValidationHelpers>();
-        var svc = new MockChangeLanguageService(processHelper.Object, gitHelper.Object, logger, commonValidationHelper.Object);
+        var svc = new MockChangeLanguageService();
         var tsp = new MockTspHelper();
         gitHelper.Setup(g => g.GetRepoName(It.IsAny<string>())).Returns("azure-sdk-for-java");
         var tool = new TspClientUpdateTool(new NullLogger<TspClientUpdateTool>(), [svc], gitHelper.Object, tsp);
@@ -96,10 +91,7 @@ public class TspClientUpdateToolAutoTests
     {
         var tsp = new MockTspHelper();
         var gitHelper = new Mock<IGitHelper>();
-        var processHelper = new Mock<IProcessHelper>();
-        var logger = new TestLogger<LanguageService>();
-        var commonValidationHelper = new Mock<ICommonValidationHelpers>();
-        int calls = 0; var svc = new TestLanguageServiceFailThenFix(processHelper.Object, gitHelper.Object, logger, commonValidationHelper.Object, () => calls++);
+        int calls = 0; var svc = new TestLanguageServiceFailThenFix(() => calls++);
         gitHelper.Setup(g => g.GetRepoName(It.IsAny<string>())).Returns("azure-sdk-for-java");
         var tool = new TspClientUpdateTool(new NullLogger<TspClientUpdateTool>(), [svc], gitHelper.Object, tsp);
         var pkg = CreateTempPackageDir();
@@ -111,19 +103,20 @@ public class TspClientUpdateToolAutoTests
         Assert.That(string.Join(" ", resp.NextSteps), Does.Contain("validation failed"), "Should indicate validation failure");
     }
 
-    private class TestLanguageServiceFailThenFix(IProcessHelper processHelper, IGitHelper gitHelper, ILogger<LanguageService> logger, ICommonValidationHelpers commonValidationHelpers, Func<int> next) :
-        LanguageService(processHelper, gitHelper, logger, commonValidationHelpers)
+    private class TestLanguageServiceFailThenFix: LanguageService
     {
         public override SdkLanguage Language { get; } = SdkLanguage.Java;
         public override bool IsTspClientupdatedSupported => true;
         public SdkLanguage SupportedLanguage => SdkLanguage.Java;
+        private Func<int> _next;
+        public TestLanguageServiceFailThenFix(Func<int> next) { _next = next; }
         public override Task<List<ApiChange>> DiffAsync(string oldGenerationPath, string newGenerationPath) => Task.FromResult(new List<ApiChange>());
         public override string? GetCustomizationRoot(string generationRoot, CancellationToken ct) =>
             Path.Combine(generationRoot, "customization"); // Mock customization root exists
         public override Task<bool> ApplyPatchesAsync(string commitSha, string customizationRoot, string packagePath, CancellationToken ct) => Task.FromResult(true); // Simulate patches applied
         public override Task<ValidationResult> ValidateAsync(string packagePath, CancellationToken ct)
         {
-            var attempt = next();
+            var attempt = _next();
             if (attempt == 0)
             {
                 return Task.FromResult(ValidationResult.CreateFailure("compile error"));

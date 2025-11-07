@@ -13,13 +13,13 @@ namespace Azure.Sdk.Tools.Cli.Services.Languages
         protected ILogger<LanguageService> logger;
         protected ICommonValidationHelpers commonValidationHelpers;
 
-        public LanguageService(IProcessHelper processHelper, IGitHelper gitHelper, ILogger<LanguageService> logger, ICommonValidationHelpers commonValidationHelpers)
+        /*public LanguageService(IProcessHelper processHelper, IGitHelper gitHelper, ILogger<LanguageService> logger, ICommonValidationHelpers commonValidationHelpers)
         {
             this.processHelper = processHelper;
             this.gitHelper = gitHelper;
             this.logger = logger;
             this.commonValidationHelpers = commonValidationHelpers;
-        }
+        }*/
 
         public abstract SdkLanguage Language { get; }
         public virtual bool IsTspClientupdatedSupported => false;

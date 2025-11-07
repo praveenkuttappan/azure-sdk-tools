@@ -22,9 +22,13 @@ public sealed partial class JavaLanguageService : LanguageService
         IGitHelper gitHelper,
         IMicroagentHostService microagentHost,
         ILogger<LanguageService> logger,
-        ICommonValidationHelpers commonValidationHelpers): base(processHelper, gitHelper, logger, commonValidationHelpers)
+        ICommonValidationHelpers commonValidationHelpers)
     {
         this.microagentHost = microagentHost;
+        base.processHelper = processHelper;
+        base.gitHelper = gitHelper;
+        base.logger = logger;
+        base.commonValidationHelpers = commonValidationHelpers;
     }
 
     public override async Task<PackageInfo> GetPackageInfo(string packagePath, CancellationToken ct = default)
