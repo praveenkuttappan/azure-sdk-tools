@@ -19,18 +19,15 @@ namespace Azure.Sdk.Tools.Cli.Tools.Package;
 [McpServerToolType, Description("This type contains the tools to update package metadata content for Azure SDK packages.")]
 public class MetadataUpdateTool : LanguageMcpTool
 {
-    private readonly ILanguageSpecificResolver<ILanguagePackageUpdate> _packageUpdateResolver;
     private readonly ISpecGenSdkConfigHelper _specGenSdkConfigHelper;
 
     public MetadataUpdateTool(
         IGitHelper gitHelper,
         ILogger<MetadataUpdateTool> logger,
-        ILanguageSpecificResolver<ILanguagePackageUpdate> packageUpdateResolver,
         ISpecGenSdkConfigHelper specGenSdkConfigHelper,
         IEnumerable<LanguageService> languageServices)
         : base(languageServices, gitHelper, logger)
     {
-        _packageUpdateResolver = packageUpdateResolver;
         _specGenSdkConfigHelper = specGenSdkConfigHelper;
     }
 
@@ -80,6 +77,8 @@ public class MetadataUpdateTool : LanguageMcpTool
 
             this.logger.LogInformation("Repository root discovered: {SdkRepoRoot}", sdkRepoRoot);
 
+            // Get language service
+            var languageService = GetLanguageService(packagePath);
             var (configContentType, configValue) = await _specGenSdkConfigHelper.GetConfigurationAsync(sdkRepoRoot, SpecGenSdkConfigType.UpdateMetadata);
             if (configContentType != SpecGenSdkConfigContentType.Unknown && !string.IsNullOrEmpty(configValue))
             {
@@ -97,8 +96,7 @@ public class MetadataUpdateTool : LanguageMcpTool
                 if (processOptions != null)
                 {
                     // Get package info from language service
-                    PackageInfo? packageInfo = null;
-                    var languageService = GetLanguageService(packagePath);
+                    PackageInfo? packageInfo = null;                    
                     if (languageService != null)
                     {
                         try
@@ -118,11 +116,10 @@ public class MetadataUpdateTool : LanguageMcpTool
             // Hand over to language service for language-specific update steps
             this.logger.LogInformation("No configured script found for updating package metadata. Checking for language-specific update implementations...");
 
-            // Resolve language package update service
-            var languagePackageUpdateService = await _packageUpdateResolver.Resolve(packagePath, ct);
-            if (languagePackageUpdateService != null)
+            // Call language service to update metadata
+            if (languageService != null)
             {
-                return await languagePackageUpdateService.UpdateMetadataAsync(packagePath, ct);
+                return await languageService.UpdateMetadataAsync(packagePath, ct);
             }
 
             this.logger.LogInformation("No language-specific package update implementation found for package path: {packagePath}.", packagePath);

@@ -31,6 +31,7 @@ public class SdkBuildToolTests
     private SdkBuildTool _tool;
     private Mock<IGitHelper> _mockGitHelper;
     private Mock<IProcessHelper> _mockProcessHelper;
+    private Mock<IMavenHelper> _mockMavenHelper;
     private Mock<INpxHelper> _mockNpxHelper;
     private Mock<IPowershellHelper> _mockPowerShellHelper;
     private Mock<ISpecGenSdkConfigHelper> _mockSpecGenSdkConfigHelper;
@@ -45,6 +46,7 @@ public class SdkBuildToolTests
         // Create mocks
         _mockGitHelper = new Mock<IGitHelper>();
         _mockProcessHelper = new Mock<IProcessHelper>();
+        _mockMavenHelper = new Mock<IMavenHelper>();
         _mockSpecGenSdkConfigHelper = new Mock<ISpecGenSdkConfigHelper>();
         _mockNpxHelper = new Mock<INpxHelper>();
         _mockPowerShellHelper = new Mock<IPowershellHelper>();
@@ -57,7 +59,7 @@ public class SdkBuildToolTests
         _tempDirectory = TempDirectory.Create("SdkBuildToolTests");
         _languageServices = [
             new PythonLanguageService(_mockProcessHelper.Object, _mockNpxHelper.Object, _mockGitHelper.Object, languageLogger, _commonValidationHelpers.Object),
-            new JavaLanguageService(_mockProcessHelper.Object, _mockGitHelper.Object, mockMicrohostAgent.Object, languageLogger, _commonValidationHelpers.Object),
+            new JavaLanguageService(_mockProcessHelper.Object, _mockMavenHelper.Object, _mockGitHelper.Object, mockMicrohostAgent.Object, languageLogger, _commonValidationHelpers.Object),
             new JavaScriptLanguageService(_mockProcessHelper.Object, _mockNpxHelper.Object, _mockGitHelper.Object, languageLogger, _commonValidationHelpers.Object),
             new GoLanguageService(_mockProcessHelper.Object, _mockNpxHelper.Object, _mockGitHelper.Object, languageLogger, _commonValidationHelpers.Object),
             new DotnetLanguageService(_mockProcessHelper.Object, _mockPowerShellHelper.Object, _mockGitHelper.Object, languageLogger, _commonValidationHelpers.Object)
@@ -198,8 +200,8 @@ public class SdkBuildToolTests
 
         // Assert
         Assert.That(result.ResponseErrors?.First(), Does.Contain("Configuration file not found"));
-        _mockGitHelper.Verify(x => x.DiscoverRepoRoot(_tempDirectory.DirectoryPath), Times.Once);
-        _mockGitHelper.Verify(x => x.GetRepoName(_tempDirectory.DirectoryPath), Times.Once);
+        _mockGitHelper.Verify(x => x.DiscoverRepoRoot(_tempDirectory.DirectoryPath), Times.AtLeastOnce);
+        _mockGitHelper.Verify(x => x.GetRepoName(_tempDirectory.DirectoryPath), Times.AtLeastOnce);
         _mockSpecGenSdkConfigHelper.Verify(x => x.GetConfigurationAsync(_tempDirectory.DirectoryPath, SpecGenSdkConfigType.Build), Times.Once);
     }
 

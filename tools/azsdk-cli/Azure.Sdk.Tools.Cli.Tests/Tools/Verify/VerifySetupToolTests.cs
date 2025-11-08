@@ -20,6 +20,7 @@ internal class VerifySetupToolTests
     private TestLogger<VerifySetupTool> logger;
     private List<LanguageService> languageServices;
     private Mock<INpxHelper> _mockNpxHelper;
+    private Mock<IMavenHelper> _mockMavenHelper;
     private Mock<IPowershellHelper> _mockPowerShellHelper;
     private TestLogger<LanguageService> _languageLogger;
     private Mock<IMicroagentHostService> _mockMicrohostAgent;
@@ -35,6 +36,7 @@ internal class VerifySetupToolTests
         _languageLogger = new TestLogger<LanguageService>();
         _mockMicrohostAgent = new Mock<IMicroagentHostService>();
         _mockNpxHelper = new Mock<INpxHelper>();
+        _mockMavenHelper = new Mock<IMavenHelper>();
         _mockPowerShellHelper = new Mock<IPowershellHelper>();
         _mockGitHelper = new Mock<IGitHelper>();
         _commonValidationHelpers = new Mock<ICommonValidationHelpers>();
@@ -60,7 +62,7 @@ internal class VerifySetupToolTests
 
         languageServices = [
             new PythonLanguageService(mockProcessHelper.Object, _mockNpxHelper.Object, _mockGitHelper.Object, _languageLogger, _commonValidationHelpers.Object),
-            new JavaLanguageService(mockProcessHelper.Object, _mockGitHelper.Object, _mockMicrohostAgent.Object, _languageLogger, _commonValidationHelpers.Object),
+            new JavaLanguageService(mockProcessHelper.Object, _mockMavenHelper.Object, _mockGitHelper.Object, _mockMicrohostAgent.Object, _languageLogger, _commonValidationHelpers.Object),
             new JavaScriptLanguageService(mockProcessHelper.Object, _mockNpxHelper.Object, _mockGitHelper.Object, _languageLogger, _commonValidationHelpers.Object),
             new GoLanguageService(mockProcessHelper.Object, _mockNpxHelper.Object, _mockGitHelper.Object, _languageLogger, _commonValidationHelpers.Object),
             new DotnetLanguageService(mockProcessHelper.Object, _mockPowerShellHelper.Object, _mockGitHelper.Object, _languageLogger, _commonValidationHelpers.Object)

@@ -25,6 +25,7 @@ namespace Azure.Sdk.Tools.Cli.Tests.Services.Languages
             var gitHelperMock = new Mock<IGitHelper>();
             gitHelperMock.Setup(g => g.GetRepoName(It.IsAny<string>())).Returns("azure-sdk-for-java");
             LangService = new JavaLanguageService(
+                new Mock<IProcessHelper>().Object,
                 MockMavenHelper.Object,
                 new Mock<IGitHelper>().Object,
                 new Mock<IMicroagentHostService>().Object,

@@ -9,7 +9,6 @@ namespace Azure.Sdk.Tools.Cli.Services.Languages
     public abstract class LanguageService
     {
         protected IProcessHelper processHelper;
-        protected IMavenHelper mavenHelper;
         protected IGitHelper gitHelper;
         protected ILogger<LanguageService> logger;
         protected ICommonValidationHelpers commonValidationHelpers;
@@ -17,7 +16,6 @@ namespace Azure.Sdk.Tools.Cli.Services.Languages
         /*public LanguageService(IProcessHelper processHelper, IGitHelper gitHelper, ILogger<LanguageService> logger, ICommonValidationHelpers commonValidationHelpers)
         {
             this.processHelper = processHelper;
-            this.mavenHelper = mavenHelper;
             this.gitHelper = gitHelper;
             this.logger = logger;
             this.commonValidationHelpers = commonValidationHelpers;
@@ -26,7 +24,7 @@ namespace Azure.Sdk.Tools.Cli.Services.Languages
         public abstract SdkLanguage Language { get; }
         public virtual bool IsTspClientupdatedSupported => false;
 #pragma warning disable CS1998
-        public async virtual Task<PackageInfo> GetPackageInfo(string packagePath, CancellationToken cancellationToken = default)
+        public virtual async Task<PackageInfo> GetPackageInfo(string packagePath, CancellationToken cancellationToken = default)
         {
             throw new NotImplementedException("GetPackageInfo is not implemented for this language.");
         }
@@ -231,6 +229,39 @@ namespace Azure.Sdk.Tools.Cli.Services.Languages
         public virtual List<SetupRequirements.Requirement> GetRequirements(string packagePath, Dictionary<string, List<SetupRequirements.Requirement>> categories, CancellationToken ct = default)
         {
             throw new NotImplementedException("Environment requirements are not implemented for this language.");
+        }
+
+        /// <summary>
+        /// Updates the package metadata content for a specified package.
+        /// </summary>
+        /// <param name="packagePath">The absolute path to the package directory.</param>
+        /// <param name="ct">Cancellation token for the operation.</param>
+        /// <returns>A response indicating the result of the metadata update operation.</returns>
+        public virtual async Task<PackageOperationResponse> UpdateMetadataAsync(string packagePath, CancellationToken ct)
+        {
+            return await Task.FromResult(PackageOperationResponse.CreateSuccess("No package metadata updates need to be performed.", null));
+        }
+
+        /// <summary>
+        /// Updates the changelog content for a specified package.
+        /// </summary>
+        /// <param name="packagePath">The absolute path to the package directory.</param>
+        /// <param name="ct">Cancellation token for the operation.</param>
+        /// <returns>A response indicating the result of the changelog update operation.</returns>
+        public virtual async Task<PackageOperationResponse> UpdateChangelogContentAsync(string packagePath, CancellationToken ct)
+        {
+            return await Task.FromResult(PackageOperationResponse.CreateSuccess("No changelog updates need to be performed.", null));
+        }
+
+        /// <summary>
+        /// Updates the version for a specified package.
+        /// </summary>
+        /// <param name="packagePath">The absolute path to the package directory.</param>
+        /// <param name="ct">Cancellation token for the operation.</param>
+        /// <returns>A response indicating the result of the version update operation.</returns>
+        public virtual async Task<PackageOperationResponse> UpdateVersionAsync(string packagePath, CancellationToken ct)
+        {
+            return await Task.FromResult(PackageOperationResponse.CreateSuccess("No version updates need to be performed.", null));
         }
     }
 }

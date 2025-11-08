@@ -15,6 +15,7 @@ public sealed partial class JavaLanguageService : LanguageService
     public override SdkLanguage Language { get; } = SdkLanguage.Java;
     public override bool IsTspClientupdatedSupported => true;
     private readonly IMicroagentHostService microagentHost;
+    private readonly IMavenHelper mavenHelper;
     private const string CustomizationDirName = "customization";
 
     public JavaLanguageService(
@@ -26,8 +27,8 @@ public sealed partial class JavaLanguageService : LanguageService
         ICommonValidationHelpers commonValidationHelpers)
     {
         this.microagentHost = microagentHost;
+        this.mavenHelper = mavenHelper;
         base.processHelper = processHelper;
-        base.mavenHelper = mavenHelper;
         base.gitHelper = gitHelper;
         base.logger = logger;
         base.commonValidationHelpers = commonValidationHelpers;
@@ -191,10 +192,9 @@ public sealed partial class JavaLanguageService : LanguageService
 
         // Run Maven tests using consistent command pattern
         var pomPath = Path.Combine(packagePath, "pom.xml");
-        var command = "mvn";
-        var args = new[] { "test", "--no-transfer-progress", "-f", pomPath };
+        var args = new[] { "--no-transfer-progress" };
 
-        var result = await processHelper.Run(new(command, args, workingDirectory: packagePath, timeout: TestTimeout), ct);
+        var result = await this.mavenHelper.Run(new("test", args, pomPath, workingDirectory: packagePath, timeout: TestTimeout), ct);
 
         if (result.ExitCode == 0)
         {

@@ -34,7 +34,6 @@ public class MetadataUpdateToolTests
 
     private MetadataUpdateTool _tool;
     private Mock<IGitHelper> _mockGitHelper;
-    private Mock<ILanguageSpecificResolver<ILanguagePackageUpdate>> _mockPackageUpdateResolver;
     private Mock<ISpecGenSdkConfigHelper> _mockSpecGenSdkConfigHelper;
     private Mock<ILanguagePackageUpdate> _mockLanguagePackageUpdate;
     private Mock<LanguageService> _mockLanguageService;
@@ -49,7 +48,6 @@ public class MetadataUpdateToolTests
     {
         // Create mocks
         _mockGitHelper = new Mock<IGitHelper>();
-        _mockPackageUpdateResolver = new Mock<ILanguageSpecificResolver<ILanguagePackageUpdate>>();
         _mockSpecGenSdkConfigHelper = new Mock<ISpecGenSdkConfigHelper>();
         _mockLanguagePackageUpdate = new Mock<ILanguagePackageUpdate>();
         _mockLanguageService = new Mock<LanguageService>();
@@ -95,11 +93,14 @@ public class MetadataUpdateToolTests
             PackageType = SdkType.Unknown
         };
 
+        // Setup language service to return success response for UpdateMetadataAsync
+        _mockLanguageService.Setup(x => x.UpdateMetadataAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(_successResponse);
+
         // Create the tool instance
         _tool = new MetadataUpdateTool(
             _mockGitHelper.Object,
             _logger,
-            _mockPackageUpdateResolver.Object,
             _mockSpecGenSdkConfigHelper.Object,
             new[] { _mockLanguageService.Object }
         );
@@ -229,7 +230,8 @@ public class MetadataUpdateToolTests
     {
         // Arrange
         var testPath = _tempDirectory.DirectoryPath;
-        _mockGitHelper.Setup(x => x.DiscoverRepoRoot(testPath)).Returns(TestRepoRoot);
+        _mockGitHelper.Setup(x => x.DiscoverRepoRoot(It.IsAny<string>())).Returns(TestRepoRoot);
+        _mockGitHelper.Setup(x => x.GetRepoName(It.IsAny<string>())).Returns("azure-sdk-for-net");
         _mockSpecGenSdkConfigHelper.Setup(x => x.GetConfigurationAsync(TestRepoRoot, SpecGenSdkConfigType.UpdateMetadata))
             .ReturnsAsync((SpecGenSdkConfigContentType.Command, TestConfigValue));
 
@@ -242,19 +244,11 @@ public class MetadataUpdateToolTests
             It.IsAny<int>()))
             .Returns((ProcessOptions)null!);
 
-        _mockPackageUpdateResolver.Setup(x => x.Resolve(testPath, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(_mockLanguagePackageUpdate.Object);
-
-        _mockLanguagePackageUpdate.Setup(x => x.UpdateMetadataAsync(testPath, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(_successResponse);
-
         // Act
         var result = await _tool.UpdateMetadataAsync(testPath, CancellationToken.None);
 
         // Assert
         Assert.That(result, Is.EqualTo(_successResponse));
-        _mockPackageUpdateResolver.Verify(x => x.Resolve(testPath, It.IsAny<CancellationToken>()), Times.Once);
-        _mockLanguagePackageUpdate.Verify(x => x.UpdateMetadataAsync(testPath, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Test]
@@ -262,23 +256,16 @@ public class MetadataUpdateToolTests
     {
         // Arrange
         var testPath = _tempDirectory.DirectoryPath;
-        _mockGitHelper.Setup(x => x.DiscoverRepoRoot(testPath)).Returns(TestRepoRoot);
+        _mockGitHelper.Setup(x => x.DiscoverRepoRoot(It.IsAny<string>())).Returns(TestRepoRoot);
+        _mockGitHelper.Setup(x => x.GetRepoName(It.IsAny<string>())).Returns("azure-sdk-for-net");
         _mockSpecGenSdkConfigHelper.Setup(x => x.GetConfigurationAsync(TestRepoRoot, SpecGenSdkConfigType.UpdateMetadata))
             .ReturnsAsync((SpecGenSdkConfigContentType.Unknown, string.Empty));
-
-        _mockPackageUpdateResolver.Setup(x => x.Resolve(testPath, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(_mockLanguagePackageUpdate.Object);
-
-        _mockLanguagePackageUpdate.Setup(x => x.UpdateMetadataAsync(testPath, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(_successResponse);
 
         // Act
         var result = await _tool.UpdateMetadataAsync(testPath, CancellationToken.None);
 
         // Assert
         Assert.That(result, Is.EqualTo(_successResponse));
-        _mockPackageUpdateResolver.Verify(x => x.Resolve(testPath, It.IsAny<CancellationToken>()), Times.Once);
-        _mockLanguagePackageUpdate.Verify(x => x.UpdateMetadataAsync(testPath, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Test]
@@ -290,16 +277,12 @@ public class MetadataUpdateToolTests
         _mockSpecGenSdkConfigHelper.Setup(x => x.GetConfigurationAsync(TestRepoRoot, SpecGenSdkConfigType.UpdateMetadata))
             .ReturnsAsync((SpecGenSdkConfigContentType.Unknown, string.Empty));
 
-        _mockPackageUpdateResolver.Setup(x => x.Resolve(testPath, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((ILanguagePackageUpdate?)null);
-
         // Act
         var result = await _tool.UpdateMetadataAsync(testPath, CancellationToken.None);
 
         // Assert
         Assert.That(result.Result, Is.EqualTo("succeeded"));
         Assert.That(result.Message, Is.EqualTo("No package metadata updates need to be performed."));
-        _mockPackageUpdateResolver.Verify(x => x.Resolve(testPath, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Test]
@@ -328,22 +311,16 @@ public class MetadataUpdateToolTests
         var cancellationToken = new CancellationToken();
         
         _mockGitHelper.Setup(x => x.DiscoverRepoRoot(testPath)).Returns(TestRepoRoot);
+        _mockGitHelper.Setup(x => x.GetRepoName(testPath)).Returns("azure-sdk-for-net");
+        _mockGitHelper.Setup(x => x.GetRepoName(TestRepoRoot)).Returns("azure-sdk-for-net");
         _mockSpecGenSdkConfigHelper.Setup(x => x.GetConfigurationAsync(TestRepoRoot, SpecGenSdkConfigType.UpdateMetadata))
             .ReturnsAsync((SpecGenSdkConfigContentType.Unknown, string.Empty));
-
-        _mockPackageUpdateResolver.Setup(x => x.Resolve(testPath, cancellationToken))
-            .ReturnsAsync(_mockLanguagePackageUpdate.Object);
-
-        _mockLanguagePackageUpdate.Setup(x => x.UpdateMetadataAsync(testPath, cancellationToken))
-            .ReturnsAsync(_successResponse);
 
         // Act
         var result = await _tool.UpdateMetadataAsync(testPath, cancellationToken);
 
         // Assert
         Assert.That(result, Is.EqualTo(_successResponse));
-        _mockPackageUpdateResolver.Verify(x => x.Resolve(testPath, cancellationToken), Times.Once);
-        _mockLanguagePackageUpdate.Verify(x => x.UpdateMetadataAsync(testPath, cancellationToken), Times.Once);
     }
 
     #endregion
