@@ -9,6 +9,7 @@ namespace Azure.Sdk.Tools.Cli.Services.Languages
     public abstract class LanguageService
     {
         protected IProcessHelper processHelper;
+        protected IMavenHelper mavenHelper;
         protected IGitHelper gitHelper;
         protected ILogger<LanguageService> logger;
         protected ICommonValidationHelpers commonValidationHelpers;
@@ -16,6 +17,7 @@ namespace Azure.Sdk.Tools.Cli.Services.Languages
         /*public LanguageService(IProcessHelper processHelper, IGitHelper gitHelper, ILogger<LanguageService> logger, ICommonValidationHelpers commonValidationHelpers)
         {
             this.processHelper = processHelper;
+            this.mavenHelper = mavenHelper;
             this.gitHelper = gitHelper;
             this.logger = logger;
             this.commonValidationHelpers = commonValidationHelpers;

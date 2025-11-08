@@ -1,5 +1,4 @@
 using Azure.Sdk.Tools.Cli.Helpers;
-using Azure.Sdk.Tools.Cli.Models;
 using Azure.Sdk.Tools.Cli.Models.Responses.Package;
 using Azure.Sdk.Tools.Cli.Services.Languages;
 
@@ -48,13 +47,10 @@ public partial class JavaLanguageService : LanguageService
                 return prerequisiteCheck;
             }
 
-
             // Determine the Maven goal based on fix parameter
             var goal = fixCheckErrors ? "spotless:apply" : "spotless:check";
-            var command = "mvn";
-            var args = new[] { goal, "-f", pomPath };
 
-            var result = await processHelper.Run(new(command, args, workingDirectory: packagePath, timeout: MavenFormatTimeout), cancellationToken);
+            var result = await _mavenHelper.Run(new(goal, [], pomPath, workingDirectory: packagePath, timeout: MavenFormatTimeout), cancellationToken);
 
             if (result.ExitCode == 0)
             {
@@ -67,7 +63,10 @@ public partial class JavaLanguageService : LanguageService
             else
             {
                 var errorMessage = fixCheckErrors ? "Code formatting failed to apply" : "Code formatting check failed - some files need formatting";
-                logger.LogWarning("{ErrorMessage} with exit code {ExitCode}", errorMessage, result.ExitCode);
+                
+                // Log command only for troubleshooting failed operations
+                var fullCommand = $"mvn {goal}";
+                logger.LogWarning("{ErrorMessage} with exit code {ExitCode}. To reproduce: {Command}", errorMessage, result.ExitCode, fullCommand);
 
                 var output = result.Output;
                 var nextSteps = fixCheckErrors ?
@@ -82,7 +81,9 @@ public partial class JavaLanguageService : LanguageService
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error during code formatting for Java project at: {PackagePath}", packagePath);
+            var goal = fixCheckErrors ? "spotless:apply" : "spotless:check";
+            var fullCommand = $"mvn {goal}";
+            logger.LogError(ex, "Error during code formatting for Java project at: {PackagePath}. To reproduce: {Command}", packagePath, fullCommand);
             return new PackageCheckResponse(1, "", $"Error during code formatting: {ex.Message}")
             {
                 NextSteps = [.. exceptionHandlingNextSteps]
@@ -107,34 +108,36 @@ public partial class JavaLanguageService : LanguageService
             // Use mvn install with ALL linting tools in fail-safe mode
             // This follows the "accumulate all errors" pattern instead of failing fast
             // The -am flag ensures parent POMs are built/resolved automatically
-            var command = "mvn";
+            // Maven flags based on Azure SDK for Java pipeline:
+            // https://github.com/Azure/azure-sdk-for-java/blob/main/eng/pipelines/templates/steps/run-and-validate-linting.yml#L31
             var args = new List<string>
             {
-                "install",
-                "--no-transfer-progress",
-                "-DskipTests",
-                "-Dgpg.skip",
-                "-DtrimStackTrace=false",
-                "-Dmaven.javadoc.skip=false",
-                "-Dcodesnippet.skip=true",
-                "-Dspotless.skip=false",
-                "-Djacoco.skip=true",
-                "-Dshade.skip=true",
-                "-Dmaven.antrun.skip=true",
-                "-am",
-                "-f", pomPath
+                "--no-transfer-progress",    // Reduce build log noise
+                "-DskipTests",              // Skip test execution for faster linting
+                "-Dgpg.skip",               // Skip GPG signing for faster builds
+                "-DtrimStackTrace=false",   // Full stack traces for better debugging
+                "-Dmaven.javadoc.skip=false", // Enable Javadoc generation for linting
+                "-Dcodesnippet.skip=true",  // Skip snippet processing during linting
+                "-Dspotless.skip=false",    // Ensure Spotless formatting runs
+                "-Djacoco.skip=true",       // Skip code coverage for faster builds
+                "-Dshade.skip=true",        // Skip JAR shading for faster builds
+                "-Dmaven.antrun.skip=true", // Skip Ant tasks for faster builds
+                "-am"                       // Also build required modules automatically
             };
 
             // Configure ALL linting tools in fail-safe mode - accumulate errors instead of failing fast
-            args.AddRange([
-                "-Dcheckstyle.failOnViolation=false",
-                "-Dcheckstyle.failsOnError=false",
-                "-Dspotbugs.failOnError=false",
-                "-Drevapi.failBuildOnProblemsFound=false"
-                // Note: Javadoc doesn't have a failOnError flag - it contributes to build exit code
-            ]);
+            if (fixCheckErrors)
+            {
+                args.AddRange([
+                    "-Dcheckstyle.failOnViolation=false",
+                    "-Dcheckstyle.failsOnError=false",
+                    "-Dspotbugs.failOnError=false",
+                    "-Drevapi.failBuildOnProblemsFound=false"
+                    // Note: Javadoc doesn't have a failOnError flag - it contributes to build exit code
+                ]);
+            };
 
-            var result = await processHelper.Run(new(command, [.. args], workingDirectory: packagePath, timeout: MavenLintTimeout), cancellationToken);
+            var result = await _mavenHelper.Run(new("install", [.. args], pomPath, workingDirectory: packagePath, timeout: MavenLintTimeout), cancellationToken);
 
             // Parse Maven output to determine which linting tools found issues
             var output = result.Output;
@@ -153,8 +156,10 @@ public partial class JavaLanguageService : LanguageService
                     return new PackageCheckResponse(result.ExitCode, successMessage);
                 }
 
+                // Log command only for troubleshooting when build has other issues
+                var fullCommand = $"mvn install {string.Join(" ", args)}";
+                logger.LogWarning("Code linting completed, but build had other issues. Exit code: {ExitCode}. To reproduce: {Command}", result.ExitCode, fullCommand);
                 const string otherIssuesMessage = "Code linting completed, but build had other issues. Check Maven output for details.";
-                logger.LogInformation("Code linting completed, but build had other issues. Check Maven output for details.");
                 return new PackageCheckResponse(result.ExitCode, otherIssuesMessage);
             }
             else
@@ -163,10 +168,14 @@ public partial class JavaLanguageService : LanguageService
                 var passedToolNames = passedTools.Count > 0 ? string.Join(", ", passedTools.Select(t => t.Tool)) : "None";
 
                 var errorMessage = $"Code linting found issues - Tools with issues: {failedToolNames}. Clean tools: {passedToolNames}";
+                
+                // Log command only for troubleshooting when linting issues are found
+                var fullCommand = $"mvn install {string.Join(" ", args)}";
                 logger.LogWarning(
-                    "Code linting found issues - Tools with issues: {FailedToolNames}. Clean tools: {PassedToolNames}",
+                    "Code linting found issues - Tools with issues: {FailedToolNames}. Clean tools: {PassedToolNames}. To reproduce: {Command}",
                     failedToolNames,
-                    passedToolNames);
+                    passedToolNames,
+                    fullCommand);
 
                 var nextSteps = new List<string>();
                 if (failedTools.Any(t => t.Tool == "Checkstyle"))
@@ -197,10 +206,11 @@ public partial class JavaLanguageService : LanguageService
         }
         catch (Exception ex)
         {
+            // Note: args not available in catch block scope, but command details are logged by ProcessHelperBase
             logger.LogError(ex, "Error during code linting for Java project at: {PackagePath}", packagePath);
             return new PackageCheckResponse(1, "", $"Error during code linting: {ex.Message}")
             {
-                NextSteps = [.. exceptionHandlingNextSteps, "Verify that the project's pom.xml is valid and contains required linting plugins"]
+                NextSteps = [.. exceptionHandlingNextSteps, "Verify that the project's pom.xml is valid and contains required linting plugins", "Check the Maven command logs above for the exact command that failed"]
             };
         }
     }
@@ -220,10 +230,7 @@ public partial class JavaLanguageService : LanguageService
             }
 
             // Use Azure SDK approach: mvn com.azure.tools:codesnippet-maven-plugin:update-codesnippet
-            var command = "mvn";
-            var args = new[] { "com.azure.tools:codesnippet-maven-plugin:update-codesnippet", "-f", pomPath };
-
-            var result = await processHelper.Run(new(command, args, workingDirectory: packagePath, timeout: MavenSnippetTimeout), cancellationToken);
+            var result = await _mavenHelper.Run(new("com.azure.tools:codesnippet-maven-plugin:update-codesnippet", [], pomPath, workingDirectory: packagePath, timeout: MavenSnippetTimeout), cancellationToken);
 
             if (result.ExitCode == 0)
             {
@@ -232,7 +239,10 @@ public partial class JavaLanguageService : LanguageService
             }
             else
             {
-                logger.LogWarning("Code snippet update failed with exit code {ExitCode}", result.ExitCode);
+                // Log command only for troubleshooting failed operations
+                const string goal = "com.azure.tools:codesnippet-maven-plugin:update-codesnippet";
+                var fullCommand = $"mvn {goal}";
+                logger.LogWarning("Code snippet update failed with exit code {ExitCode}. To reproduce: {Command}", result.ExitCode, fullCommand);
 
                 var output = result.Output;
                 return new PackageCheckResponse(result.ExitCode, output, "Code snippet update failed - some snippets may be outdated or missing")
@@ -243,7 +253,9 @@ public partial class JavaLanguageService : LanguageService
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error during code snippet update for Java project at: {PackagePath}", packagePath);
+            const string goal = "com.azure.tools:codesnippet-maven-plugin:update-codesnippet";
+            var fullCommand = $"mvn {goal}";
+            logger.LogError(ex, "Error during code snippet update for Java project at: {PackagePath}. To reproduce: {Command}", packagePath, fullCommand);
             return new PackageCheckResponse(1, "", $"Error during code snippet update: {ex.Message}")
             {
                 NextSteps = [.. exceptionHandlingNextSteps]
@@ -278,6 +290,17 @@ public partial class JavaLanguageService : LanguageService
         }
     }
 
+    public async Task<PackageCheckResponse> ValidateReadme(string packagePath, bool fixCheckErrors = false, CancellationToken cancellationToken = default)
+    {
+        return await commonValidationHelpers.ValidateReadme(packagePath, fixCheckErrors, cancellationToken);
+    }
+
+    public async Task<PackageCheckResponse> ValidateChangelog(string packagePath, bool fixCheckErrors = false, CancellationToken cancellationToken = default)
+    {
+        var packageName = Path.GetFileName(packagePath);
+        return await commonValidationHelpers.ValidateChangelog(packageName, packagePath, fixCheckErrors, cancellationToken);
+    }
+
     /// <summary>
     /// Analyzes the Maven dependency tree for conflicts, duplicates, and issues.
     /// Uses 'mvn dependency:tree -Dverbose' as recommended in Azure SDK for Java troubleshooting.
@@ -288,10 +311,9 @@ public partial class JavaLanguageService : LanguageService
     /// <returns>Analysis results</returns>
     private async Task<PackageCheckResponse> AnalyzeDependencyTree(string packagePath, string pomPath, CancellationToken cancellationToken)
     {
-        var command = "mvn";
-        var args = new[] { "dependency:tree", "-Dverbose", "-f", pomPath };
+        var args = new[] { "-Dverbose" };
 
-        var result = await processHelper.Run(new(command, args, workingDirectory: packagePath, timeout: TimeSpan.FromMinutes(5)), cancellationToken);
+        var result = await _mavenHelper.Run(new("dependency:tree", args, pomPath, workingDirectory: packagePath, timeout: TimeSpan.FromMinutes(5)), cancellationToken);
 
         var output = result.Output;
         
@@ -303,8 +325,10 @@ public partial class JavaLanguageService : LanguageService
             return new PackageCheckResponse(0, successMessage);
         }
 
+        // Log command only for troubleshooting when dependency issues are found
+        var fullCommand = $"mvn dependency:tree {string.Join(" ", args)}";
         const string errorMessage = "Dependency analysis found issues - check Maven output for conflicts or build errors";
-        logger.LogWarning("Dependency analysis found issues - check Maven output for conflicts or build errors");
+        logger.LogWarning("Dependency analysis found issues - check Maven output for conflicts or build errors. To reproduce: {Command}", fullCommand);
 
         return new PackageCheckResponse(1, output, errorMessage)
         {
@@ -326,7 +350,7 @@ public partial class JavaLanguageService : LanguageService
     private async Task<PackageCheckResponse?> ValidateMavenPrerequisites(string packagePath, string pomPath, CancellationToken cancellationToken)
     {
         // Check if Maven is available
-        var mavenCheckResult = await processHelper.Run(new("mvn", ["--version"], timeout: TimeSpan.FromSeconds(10)), cancellationToken);
+        var mavenCheckResult = await _mavenHelper.Run(new(["--version"], timeout: TimeSpan.FromSeconds(10)), cancellationToken);
         if (mavenCheckResult.ExitCode != 0)
         {
             logger.LogError("Maven is not installed or not available in PATH");
@@ -387,16 +411,4 @@ public partial class JavaLanguageService : LanguageService
          output.Contains("[ERROR]", StringComparison.OrdinalIgnoreCase) &&
          !output.Contains("Building jar:", StringComparison.OrdinalIgnoreCase) && 
          !output.Contains("-javadoc.jar", StringComparison.OrdinalIgnoreCase));
-
-    public override async Task<PackageCheckResponse> ValidateReadme(string packagePath, bool fixCheckErrors = false, CancellationToken cancellationToken = default)
-    {
-        return await commonValidationHelpers.ValidateReadme(packagePath, fixCheckErrors, cancellationToken);
-    }
-
-    public override async Task<PackageCheckResponse> ValidateChangelog(string packagePath, bool fixCheckErrors = false, CancellationToken cancellationToken = default)
-    {
-        var repoRoot = gitHelper.DiscoverRepoRoot(packagePath);
-        var packageName = Path.GetFileName(packagePath);
-        return await commonValidationHelpers.ValidateChangelog(packageName, packagePath, fixCheckErrors, cancellationToken);
-    }
 }

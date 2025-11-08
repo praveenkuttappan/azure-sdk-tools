@@ -142,7 +142,7 @@ public class SdkBuildToolTests
 
         // Mock the SpecGenSdkConfigHelper to throw an exception for missing config
         _mockSpecGenSdkConfigHelper
-            .Setup(x => x.GetBuildConfigurationAsync(_tempDirectory.DirectoryPath))
+            .Setup(x => x.GetConfigurationAsync(_tempDirectory.DirectoryPath, SpecGenSdkConfigType.Build))
             .ThrowsAsync(new InvalidOperationException("Neither 'packageOptions/buildScript/command' nor 'packageOptions/buildScript/path' found in configuration."));
 
         // Act
@@ -164,7 +164,7 @@ public class SdkBuildToolTests
 
         // Mock the SpecGenSdkConfigHelper to throw a JSON parsing exception
         _mockSpecGenSdkConfigHelper
-            .Setup(x => x.GetBuildConfigurationAsync(_tempDirectory.DirectoryPath))
+            .Setup(x => x.GetConfigurationAsync(_tempDirectory.DirectoryPath, SpecGenSdkConfigType.Build))
             .ThrowsAsync(new InvalidOperationException("Error parsing JSON configuration: Invalid JSON"));
 
         // Act
@@ -190,7 +190,7 @@ public class SdkBuildToolTests
 
         // Mock the SpecGenSdkConfigHelper to throw when config file is not found
         _mockSpecGenSdkConfigHelper
-            .Setup(x => x.GetBuildConfigurationAsync(_tempDirectory.DirectoryPath))
+            .Setup(x => x.GetConfigurationAsync(_tempDirectory.DirectoryPath, SpecGenSdkConfigType.Build))
             .ThrowsAsync(new FileNotFoundException("Configuration file not found"));
 
         // Act
@@ -198,9 +198,9 @@ public class SdkBuildToolTests
 
         // Assert
         Assert.That(result.ResponseErrors?.First(), Does.Contain("Configuration file not found"));
-        _mockGitHelper.Verify(x => x.DiscoverRepoRoot(_tempDirectory.DirectoryPath), Times.AtMost(2));
-        _mockGitHelper.Verify(x => x.GetRepoName(_tempDirectory.DirectoryPath), Times.AtMost(2));
-        _mockSpecGenSdkConfigHelper.Verify(x => x.GetBuildConfigurationAsync(_tempDirectory.DirectoryPath), Times.Once);
+        _mockGitHelper.Verify(x => x.DiscoverRepoRoot(_tempDirectory.DirectoryPath), Times.Once);
+        _mockGitHelper.Verify(x => x.GetRepoName(_tempDirectory.DirectoryPath), Times.Once);
+        _mockSpecGenSdkConfigHelper.Verify(x => x.GetConfigurationAsync(_tempDirectory.DirectoryPath, SpecGenSdkConfigType.Build), Times.Once);
     }
 
     #endregion
