@@ -50,7 +50,7 @@ public partial class JavaLanguageService : LanguageService
             // Determine the Maven goal based on fix parameter
             var goal = fixCheckErrors ? "spotless:apply" : "spotless:check";
 
-            var result = await _mavenHelper.Run(new(goal, [], pomPath, workingDirectory: packagePath, timeout: MavenFormatTimeout), cancellationToken);
+            var result = await this.mavenHelper.Run(new(goal, [], pomPath, workingDirectory: packagePath, timeout: MavenFormatTimeout), cancellationToken);
 
             if (result.ExitCode == 0)
             {
@@ -137,7 +137,7 @@ public partial class JavaLanguageService : LanguageService
                 ]);
             };
 
-            var result = await _mavenHelper.Run(new("install", [.. args], pomPath, workingDirectory: packagePath, timeout: MavenLintTimeout), cancellationToken);
+            var result = await this.mavenHelper.Run(new("install", [.. args], pomPath, workingDirectory: packagePath, timeout: MavenLintTimeout), cancellationToken);
 
             // Parse Maven output to determine which linting tools found issues
             var output = result.Output;
@@ -230,7 +230,7 @@ public partial class JavaLanguageService : LanguageService
             }
 
             // Use Azure SDK approach: mvn com.azure.tools:codesnippet-maven-plugin:update-codesnippet
-            var result = await _mavenHelper.Run(new("com.azure.tools:codesnippet-maven-plugin:update-codesnippet", [], pomPath, workingDirectory: packagePath, timeout: MavenSnippetTimeout), cancellationToken);
+            var result = await this.mavenHelper.Run(new("com.azure.tools:codesnippet-maven-plugin:update-codesnippet", [], pomPath, workingDirectory: packagePath, timeout: MavenSnippetTimeout), cancellationToken);
 
             if (result.ExitCode == 0)
             {
@@ -290,12 +290,12 @@ public partial class JavaLanguageService : LanguageService
         }
     }
 
-    public async Task<PackageCheckResponse> ValidateReadme(string packagePath, bool fixCheckErrors = false, CancellationToken cancellationToken = default)
+    public override async Task<PackageCheckResponse> ValidateReadme(string packagePath, bool fixCheckErrors = false, CancellationToken cancellationToken = default)
     {
         return await commonValidationHelpers.ValidateReadme(packagePath, fixCheckErrors, cancellationToken);
     }
 
-    public async Task<PackageCheckResponse> ValidateChangelog(string packagePath, bool fixCheckErrors = false, CancellationToken cancellationToken = default)
+    public override async Task<PackageCheckResponse> ValidateChangelog(string packagePath, bool fixCheckErrors = false, CancellationToken cancellationToken = default)
     {
         var packageName = Path.GetFileName(packagePath);
         return await commonValidationHelpers.ValidateChangelog(packageName, packagePath, fixCheckErrors, cancellationToken);
@@ -313,7 +313,7 @@ public partial class JavaLanguageService : LanguageService
     {
         var args = new[] { "-Dverbose" };
 
-        var result = await _mavenHelper.Run(new("dependency:tree", args, pomPath, workingDirectory: packagePath, timeout: TimeSpan.FromMinutes(5)), cancellationToken);
+        var result = await this.mavenHelper.Run(new("dependency:tree", args, pomPath, workingDirectory: packagePath, timeout: TimeSpan.FromMinutes(5)), cancellationToken);
 
         var output = result.Output;
         
@@ -350,7 +350,7 @@ public partial class JavaLanguageService : LanguageService
     private async Task<PackageCheckResponse?> ValidateMavenPrerequisites(string packagePath, string pomPath, CancellationToken cancellationToken)
     {
         // Check if Maven is available
-        var mavenCheckResult = await _mavenHelper.Run(new(["--version"], timeout: TimeSpan.FromSeconds(10)), cancellationToken);
+        var mavenCheckResult = await this.mavenHelper.Run(new(["--version"], timeout: TimeSpan.FromSeconds(10)), cancellationToken);
         if (mavenCheckResult.ExitCode != 0)
         {
             logger.LogError("Maven is not installed or not available in PATH");

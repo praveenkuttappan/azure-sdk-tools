@@ -9,7 +9,6 @@ using Azure.Sdk.Tools.Cli.Models.Responses.Package;
 using Azure.Sdk.Tools.Cli.Services;
 using Azure.Sdk.Tools.Cli.Services.Languages;
 using Azure.Sdk.Tools.Cli.Tools.Core;
-using Azure.Sdk.Tools.Cli.Extensions;
 
 namespace Azure.Sdk.Tools.Cli.Tools.Package
 {
@@ -56,7 +55,7 @@ namespace Azure.Sdk.Tools.Cli.Tools.Package
         {
             try
             {
-                logger.LogInformation("Building SDK for project path: {PackagePath}", packagePath);
+                this.logger.LogInformation("Building SDK for project path: {PackagePath}", packagePath);
 
                 // Validate inputs
                 if (string.IsNullOrEmpty(packagePath))
@@ -76,15 +75,29 @@ namespace Azure.Sdk.Tools.Cli.Tools.Package
                     return PackageOperationResponse.CreateFailure($"Failed to discover local sdk repo with project-path: {packagePath}.");
                 }
 
-                logger.LogInformation("Repository root path: {SdkRepoRoot}", sdkRepoRoot);
+                this.logger.LogInformation("Repository root path: {SdkRepoRoot}", sdkRepoRoot);
                 string sdkRepoName = gitHelper.GetRepoName(sdkRepoRoot);
-                logger.LogInformation("Repository name: {SdkRepoName}", sdkRepoName);
+                this.logger.LogInformation("Repository name: {SdkRepoName}", sdkRepoName);
 
-                PackageInfo? packageInfo = await PackageInfoExtensions.CreateFromPath(packagePath, packageInfoResolver, logger, ct);
+                // Get package info from language service
+                PackageInfo? packageInfo = null;
+                var languageService = GetLanguageService(packagePath);
+                if (languageService != null)
+                {
+                    try
+                    {
+                        packageInfo = await languageService.GetPackageInfo(packagePath, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        this.logger.LogWarning(ex, "Failed to get package info from language service for package: {PackagePath}", packagePath);
+                    }
+                }
+                
                 // Return if the project is python project
                 if (sdkRepoName.Contains(AzureSdkForPythonRepoName, StringComparison.OrdinalIgnoreCase))
                 {
-                    logger.LogInformation("Python SDK project detected. Skipping build step as Python SDKs do not require a build process.");
+                    this.logger.LogInformation("Python SDK project detected. Skipping build step as Python SDKs do not require a build process.");
                     return PackageOperationResponse.CreateSuccess("Python SDK project detected. Skipping build step as Python SDKs do not require a build process.", packageInfo);
                 }
 
@@ -100,7 +113,7 @@ namespace Azure.Sdk.Tools.Cli.Tools.Package
                 }
 
                 // Run the build script or command
-                logger.LogInformation("Executing build process...");
+                this.logger.LogInformation("Executing build process...");
                 var buildResult = await processHelper.Run(options, ct);
                 var trimmedBuildResult = (buildResult.Output ?? string.Empty).Trim();
                 if (buildResult.ExitCode != 0)
@@ -108,12 +121,12 @@ namespace Azure.Sdk.Tools.Cli.Tools.Package
                     return PackageOperationResponse.CreateFailure($"Build process failed with exit code {buildResult.ExitCode}. Output:\n{trimmedBuildResult}", packageInfo);
                 }
 
-                logger.LogInformation("Build process execution completed");
+                this.logger.LogInformation("Build process execution completed");
                 return PackageOperationResponse.CreateSuccess($"Build completed successfully. Output:\n{trimmedBuildResult}", packageInfo);
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Error occurred while building SDK");
+                this.logger.LogError(ex, "Error occurred while building SDK");
                 return PackageOperationResponse.CreateFailure($"An error occurred: {ex.Message}");
             }
         }
@@ -132,7 +145,7 @@ namespace Azure.Sdk.Tools.Cli.Tools.Package
                 };
 
                 var substitutedCommand = specGenSdkConfigHelper.SubstituteCommandVariables(configValue, variables);
-                logger.LogInformation("Executing build command: {SubstitutedCommand}", substitutedCommand);
+                this.logger.LogInformation("Executing build command: {SubstitutedCommand}", substitutedCommand);
 
                 var commandParts = specGenSdkConfigHelper.ParseCommand(substitutedCommand);
                 if (commandParts.Length == 0)
@@ -164,7 +177,7 @@ namespace Azure.Sdk.Tools.Cli.Tools.Package
                     throw new FileNotFoundException($"Build script not found at: {fullBuildScriptPath}");
                 }
 
-                logger.LogInformation("Executing build script file: {BuildScriptPath}", fullBuildScriptPath);
+                this.logger.LogInformation("Executing build script file: {BuildScriptPath}", fullBuildScriptPath);
 
                 return new PowershellOptions(
                     fullBuildScriptPath,

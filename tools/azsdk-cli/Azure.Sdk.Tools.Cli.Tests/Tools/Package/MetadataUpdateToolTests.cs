@@ -7,9 +7,9 @@ using Azure.Sdk.Tools.Cli.Helpers;
 using Azure.Sdk.Tools.Cli.Tests.TestHelpers;
 using Azure.Sdk.Tools.Cli.Tools.Package;
 using Azure.Sdk.Tools.Cli.Services;
+using Azure.Sdk.Tools.Cli.Services.Languages;
 using Azure.Sdk.Tools.Cli.Models;
 using Azure.Sdk.Tools.Cli.Models.Responses.Package;
-using Azure.Sdk.Tools.Cli.Extensions;
 using Microsoft.Extensions.Logging;
 
 namespace Azure.Sdk.Tools.Cli.Tests.Tools.Package;
@@ -37,7 +37,7 @@ public class MetadataUpdateToolTests
     private Mock<ILanguageSpecificResolver<ILanguagePackageUpdate>> _mockPackageUpdateResolver;
     private Mock<ISpecGenSdkConfigHelper> _mockSpecGenSdkConfigHelper;
     private Mock<ILanguagePackageUpdate> _mockLanguagePackageUpdate;
-    private Mock<ILanguageSpecificResolver<IPackageInfoHelper>> _mockPackageInfoResolver;
+    private Mock<LanguageService> _mockLanguageService;
     private TestLogger<MetadataUpdateTool> _logger;
     private TempDirectory _tempDirectory;
     private PackageInfo _testPackageInfo;
@@ -52,15 +52,13 @@ public class MetadataUpdateToolTests
         _mockPackageUpdateResolver = new Mock<ILanguageSpecificResolver<ILanguagePackageUpdate>>();
         _mockSpecGenSdkConfigHelper = new Mock<ISpecGenSdkConfigHelper>();
         _mockLanguagePackageUpdate = new Mock<ILanguagePackageUpdate>();
-        _mockPackageInfoResolver = new Mock<ILanguageSpecificResolver<IPackageInfoHelper>>();
+        _mockLanguageService = new Mock<LanguageService>();
         _logger = new TestLogger<MetadataUpdateTool>();
 
-        // Setup package info resolver to return test package info
-        var mockPackageInfoHelper = new Mock<IPackageInfoHelper>();
-        mockPackageInfoHelper.Setup(x => x.ResolvePackageInfo(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+        // Setup language service to return test package info
+        _mockLanguageService.Setup(x => x.GetPackageInfo(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(_testPackageInfo);
-        _mockPackageInfoResolver.Setup(x => x.Resolve(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(mockPackageInfoHelper.Object);
+        _mockLanguageService.Setup(x => x.Language).Returns(SdkLanguage.DotNet);
 
         // Create temp directory for tests
         _tempDirectory = TempDirectory.Create("MetadataUpdateToolTests");
@@ -103,7 +101,7 @@ public class MetadataUpdateToolTests
             _logger,
             _mockPackageUpdateResolver.Object,
             _mockSpecGenSdkConfigHelper.Object,
-            _mockPackageInfoResolver.Object
+            new[] { _mockLanguageService.Object }
         );
     }
 

@@ -18,6 +18,7 @@ public sealed partial class JavaLanguageService : LanguageService
     private const string CustomizationDirName = "customization";
 
     public JavaLanguageService(
+        IProcessHelper processHelper,
         IMavenHelper mavenHelper,
         IGitHelper gitHelper,
         IMicroagentHostService microagentHost,
@@ -25,6 +26,7 @@ public sealed partial class JavaLanguageService : LanguageService
         ICommonValidationHelpers commonValidationHelpers)
     {
         this.microagentHost = microagentHost;
+        base.processHelper = processHelper;
         base.mavenHelper = mavenHelper;
         base.gitHelper = gitHelper;
         base.logger = logger;
