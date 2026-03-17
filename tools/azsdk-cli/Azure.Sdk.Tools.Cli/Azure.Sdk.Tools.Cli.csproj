@@ -76,6 +76,9 @@
   <ItemGroup>
     <Content Update="appsettings*.json" CopyToPublishDirectory="Never" />
   </ItemGroup>
+  <ItemGroup>
+    <Folder Include="Tools\Core\ActivityLog\" />
+  </ItemGroup>
 
   <PropertyGroup>
     <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>

@@ -114,7 +114,7 @@ internal static class TelemetryRegistration
         // In development mode with dotnet run, upload telemetry to our testing app insights
         return DebugAppInsightsConnectionString;
 #else
-        return DefaultAppInsightsConnectionString;
+        return DebugAppInsightsConnectionString;
 #endif
     }
 
