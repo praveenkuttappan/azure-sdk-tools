@@ -1,24 +1,24 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+using System.ClientModel;
 using System.IO.Enumeration;
 using System.Reflection;
 using System.Text.Json;
-using System.ClientModel;
-using Microsoft.Extensions.Azure;
-using ModelContextProtocol.Server;
-using OpenAI;
-using GitHub.Copilot.SDK;
 using Azure.Sdk.Tools.Cli.Commands;
 using Azure.Sdk.Tools.Cli.CopilotAgents;
 using Azure.Sdk.Tools.Cli.Helpers;
-using Azure.Sdk.Tools.Cli.Tools.Core;
 using Azure.Sdk.Tools.Cli.Services.APIView;
 using Azure.Sdk.Tools.Cli.Services.Languages;
 using Azure.Sdk.Tools.Cli.Services.SetupRequirements;
 using Azure.Sdk.Tools.Cli.Services.TypeSpec;
 using Azure.Sdk.Tools.Cli.Services.Upgrade;
 using Azure.Sdk.Tools.Cli.Telemetry;
+using Azure.Sdk.Tools.Cli.Tools.Core;
 using Azure.Sdk.Tools.CodeownersUtils.Caches;
+using GitHub.Copilot.SDK;
+using Microsoft.Extensions.Azure;
+using ModelContextProtocol.Server;
+using OpenAI;
 
 namespace Azure.Sdk.Tools.Cli.Services
 {
