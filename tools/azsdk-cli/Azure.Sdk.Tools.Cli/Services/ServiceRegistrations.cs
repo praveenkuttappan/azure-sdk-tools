@@ -79,7 +79,6 @@ namespace Azure.Sdk.Tools.Cli.Services
             services.AddSingleton<ITspClientHelper, TspClientHelper>();
             services.AddSingleton<IAPIViewFeedbackService, APIViewFeedbackService>();
             services.AddScoped<IFeedbackClassifierService, FeedbackClassifierService>();
-            services.AddScoped<IActivityLogSanitizer, ActivityLogSanitizer>();
 
             // Process Helper Classes
             services.AddSingleton<INpxHelper, NpxHelper>();

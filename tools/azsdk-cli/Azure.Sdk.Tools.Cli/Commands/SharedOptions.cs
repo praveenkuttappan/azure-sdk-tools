@@ -23,7 +23,7 @@ namespace Azure.Sdk.Tools.Cli.Commands
             typeof(CodeownersTool),
             typeof(GitHubLabelsTool),
             typeof(LogAnalysisTool),
-            typeof(ActivityLogIngestionTool),
+            typeof(TelemetryIngestionTool),
             typeof(PackageInfoTool),
             typeof(PackageCheckTool),
             typeof(PipelineTestsTool),
