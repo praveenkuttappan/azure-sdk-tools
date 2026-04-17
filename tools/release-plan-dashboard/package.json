@@ -1,0 +1,15 @@
+{
+  "name": "release-plan-dashboard",
+  "version": "1.0.0",
+  "description": "Dashboard for Azure DevOps Release Plan work items",
+  "main": "server.js",
+  "scripts": {
+    "fetch": "node fetch-data.js",
+    "start": "node server.js",
+    "refresh": "node fetch-data.js && node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "express-session": "^1.19.0"
+  }
+}

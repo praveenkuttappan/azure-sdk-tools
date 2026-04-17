@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Azure SDK Release Plan Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <h1>Azure SDK Release Plan Dashboard</h1>
+      <span id="last-updated" class="meta-text"></span>
+    </div>
+    <div class="header-right">
+      <span id="user-info" class="user-info"></span>
+      <input type="text" id="search-box" placeholder="Filter by title, service, owner…" />
+      <span id="refresh-timer" class="meta-text"></span>
+    </div>
+  </header>
+
+  <div id="stats-bar" class="stats-bar" hidden>
+    <div class="stat"><span id="stat-total" class="stat-value">0</span><span class="stat-label">Total</span></div>
+    <div class="stat"><span id="stat-inprogress" class="stat-value">0</span><span class="stat-label">In Progress</span></div>
+    <div class="stat"><span id="stat-partial" class="stat-value">0</span><span class="stat-label">Partially Released</span></div>
+    <div class="stat"><span id="stat-new" class="stat-value">0</span><span class="stat-label">New / Not Started</span></div>
+    <div class="stat"><span id="stat-finished" class="stat-value">0</span><span class="stat-label">Finished</span></div>
+  </div>
+
+  <div id="loading" class="loading">
+    <div class="spinner"></div>
+    <p>Loading release plans&hellip;</p>
+  </div>
+
+  <div id="error-banner" class="error-banner" hidden></div>
+
+  <main id="content" hidden>
+    <div class="plane-columns">
+      <!-- Management Plane -->
+      <div class="plane-column">
+        <h2 class="plane-heading plane-heading-mgmt">Management Plane <span id="stat-mgmt" class="plane-total"></span></h2>
+
+        <section id="section-mgmt-inprogress" class="plan-section">
+          <h3 class="section-header" data-target="list-mgmt-inprogress">
+            <span class="caret">&#9660;</span> In Progress <span class="section-count"></span>
+          </h3>
+          <div id="list-mgmt-inprogress" class="plan-list"></div>
+        </section>
+
+        <section id="section-mgmt-partial" class="plan-section">
+          <h3 class="section-header" data-target="list-mgmt-partial">
+            <span class="caret">&#9660;</span> Partially Released <span class="section-count"></span>
+          </h3>
+          <div id="list-mgmt-partial" class="plan-list"></div>
+        </section>
+
+        <section id="section-mgmt-new" class="plan-section">
+          <h3 class="section-header" data-target="list-mgmt-new">
+            <span class="caret">&#9660;</span> New / Not Started <span class="section-count"></span>
+          </h3>
+          <div id="list-mgmt-new" class="plan-list"></div>
+        </section>
+
+        <section id="section-mgmt-finished" class="plan-section collapsed">
+          <h3 class="section-header" data-target="list-mgmt-finished">
+            <span class="caret">&#9654;</span> Recently Finished <span class="section-count"></span>
+          </h3>
+          <div id="list-mgmt-finished" class="plan-list" hidden></div>
+        </section>
+      </div>
+
+      <!-- Data Plane -->
+      <div class="plane-column">
+        <h2 class="plane-heading plane-heading-data">Data Plane <span id="stat-data" class="plane-total"></span></h2>
+
+        <section id="section-data-inprogress" class="plan-section">
+          <h3 class="section-header" data-target="list-data-inprogress">
+            <span class="caret">&#9660;</span> In Progress <span class="section-count"></span>
+          </h3>
+          <div id="list-data-inprogress" class="plan-list"></div>
+        </section>
+
+        <section id="section-data-partial" class="plan-section">
+          <h3 class="section-header" data-target="list-data-partial">
+            <span class="caret">&#9660;</span> Partially Released <span class="section-count"></span>
+          </h3>
+          <div id="list-data-partial" class="plan-list"></div>
+        </section>
+
+        <section id="section-data-new" class="plan-section">
+          <h3 class="section-header" data-target="list-data-new">
+            <span class="caret">&#9660;</span> New / Not Started <span class="section-count"></span>
+          </h3>
+          <div id="list-data-new" class="plan-list"></div>
+        </section>
+
+        <section id="section-data-finished" class="plan-section collapsed">
+          <h3 class="section-header" data-target="list-data-finished">
+            <span class="caret">&#9654;</span> Recently Finished <span class="section-count"></span>
+          </h3>
+          <div id="list-data-finished" class="plan-list" hidden></div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
