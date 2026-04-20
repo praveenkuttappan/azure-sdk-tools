@@ -167,14 +167,15 @@
   function detectDuplicates(plans) {
     plans.forEach(p => { delete p._duplicateOf; });
 
-    // Group by product name + release type
+    // Group by plane + product name + release type
     const groups = new Map();
     for (const p of plans) {
       if (p.state === "Finished") continue;
       const product = (p.productName || "").toLowerCase().trim();
       const rt = (p.releaseType || "").toLowerCase().trim();
       if (!product) continue;
-      const key = `${product}|${rt}`;
+      const plane = classifyPlane(p);
+      const key = `${plane}|${product}|${rt}`;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(p);
     }
@@ -490,7 +491,7 @@
     // Work item link
     if (p.releasePlanId) {
       const wiUrl = `https://dev.azure.com/azure-sdk/Release/_workitems/edit/${p.id}`;
-      html += `<div class="detail-row"><strong>Release Plan:</strong> <a href="${esc(wiUrl)}" target="_blank" rel="noopener">#${esc(String(p.releasePlanId))}</a> <span class="wi-warning">⚠️ Do not modify directly — use the release plan agent</span></div>`;
+      html += `<div class="detail-row"><strong>Release Plan:</strong> <a href="${esc(wiUrl)}" target="_blank" rel="noopener">#${esc(String(p.releasePlanId))}</a> <span class="wi-warning">⚠️ Do not modify directly — use the <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">azsdk agent</a></span></div>`;
     }
     if (p.typeSpecPath && p.specProjectPath && p.typeSpecPath !== p.specProjectPath) {
       html += `<div class="detail-row" style="font-size:.8rem;color:#605e5c;"><em>DevOps TypeSpec Path: ${esc(p.typeSpecPath)}</em></div>`;

@@ -343,7 +343,7 @@ for (const lang of LANGUAGES) {
 
 const API_SPEC_FIELDS = [
   "System.Id","System.Title","System.WorkItemType",
-  "Custom.ActiveSpecPullRequestUrl","Custom.APISpecversion","Custom.APISpecDefinitionType",
+  "Custom.ActiveSpecPullRequestUrl","Custom.RESTAPIReviews","Custom.APISpecversion","Custom.APISpecDefinitionType",
 ];
 
 const PACKAGE_FIELDS = [
@@ -432,7 +432,7 @@ function mapReleasePlan(wi, apiSpecMap) {
   for (const lang of LANGUAGES) {
     languages[LANGUAGE_DISPLAY[lang]] = {
       packageName: f[`Custom.${lang}PackageName`] || "",
-      sdkPrUrl: f[`Custom.SDKPullRequestFor${lang}`] || "",
+      sdkPrUrl: (f[`Custom.SDKPullRequestFor${lang}`] || "").trim().replace(/\/+$/, ""),
       prStatus: f[`Custom.SDKPullRequestStatusFor${lang}`] || "",
       releaseStatus: f[`Custom.ReleaseStatusFor${lang}`] || "",
       exclusionStatus: f[`Custom.ReleaseExclusionStatusFor${lang}`] || "",
@@ -445,7 +445,14 @@ function mapReleasePlan(wi, apiSpecMap) {
     const specWi = apiSpecMap[cid];
     if (specWi) {
       const sf = specWi.fields || {};
-      apiSpec = { id: cid, specPrUrl: sf["Custom.ActiveSpecPullRequestUrl"] || "", apiVersion: sf["Custom.APISpecversion"] || "", definitionType: sf["Custom.APISpecDefinitionType"] || "" };
+      let specPrUrl = (sf["Custom.ActiveSpecPullRequestUrl"] || "").trim().replace(/\/+$/, "");
+      // Fallback: extract first URL from REST API Reviews HTML field
+      if (!specPrUrl) {
+        const reviewsHtml = sf["Custom.RESTAPIReviews"] || "";
+        const hrefMatch = reviewsHtml.match(/href="([^"]+)"/);
+        if (hrefMatch) specPrUrl = hrefMatch[1].trim().replace(/\/+$/, "");
+      }
+      apiSpec = { id: cid, specPrUrl, apiVersion: sf["Custom.APISpecversion"] || "", definitionType: sf["Custom.APISpecDefinitionType"] || "" };
       break;
     }
   }
