@@ -416,8 +416,12 @@ function getField(wi, name) { return wi.fields ? wi.fields[name] : undefined; }
 
 function stripEmail(val) {
   if (!val) return "";
+  // Remove <email> patterns but keep the name part
   let cleaned = val.replace(/<[^>]*@[^>]*>/g, "").trim();
-  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleaned)) return "";
+  // If what's left is a bare email, extract the name part before @
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleaned)) {
+    return cleaned.split("@")[0].replace(/[._]/g, " ");
+  }
   return cleaned;
 }
 
@@ -447,13 +451,17 @@ function mapReleasePlan(wi, apiSpecMap) {
   }
   const createdBy = f["System.CreatedBy"];
   const createdByName = typeof createdBy === "object" ? createdBy.displayName || "" : "";
+  const rawSubmittedBy = f["Custom.ReleasePlanSubmittedby"];
+  const submittedByName = typeof rawSubmittedBy === "object" && rawSubmittedBy
+    ? rawSubmittedBy.displayName || rawSubmittedBy.uniqueName || ""
+    : (rawSubmittedBy || "");
   return {
     id, title: f["System.Title"] || "", state: f["System.State"] || "",
     createdDate: f["System.CreatedDate"] || "", changedDate: f["System.ChangedDate"] || "",
     createdBy: stripEmail(createdByName),
     releaseMonth: f["Custom.SDKReleasemonth"] || "", releaseType: f["Custom.SDKtypetobereleased"] || "",
     releasePlanId: f["Custom.ReleasePlanID"] || "", releasePlanLink: f["Custom.ReleasePlanLink"] || "",
-    submittedBy: stripEmail(f["Custom.ReleasePlanSubmittedby"] || ""),
+    submittedBy: (submittedByName || createdByName),
     ownerPM: stripEmail(f["Custom.PrimaryPM"] || ""),
     typeSpecPath: f["Custom.ApiSpecProjectPath"] || "",
     mgmtScope: f["Custom.MgmtScope"] || "", dataScope: f["Custom.DataScope"] || "",
@@ -527,7 +535,7 @@ async function fetchAllReleasePlans() {
       AND [System.Tags] NOT CONTAINS 'Release Planner App Test'
       AND (
         [System.State] IN ('In Progress','Not Started','New')
-        OR ([System.State] = 'Finished' AND [System.ChangedDate] >= @Today - 10)
+        OR ([System.State] = 'Finished' AND [System.ChangedDate] >= @Today - 60)
       )
     ORDER BY [System.ChangedDate] DESC`;
 
@@ -552,10 +560,6 @@ async function fetchAllReleasePlans() {
   let plans = workItems.map(wi => mapReleasePlan(wi, apiSpecMap)).filter(p => {
     const defType = (p.apiSpec && p.apiSpec.definitionType) || "";
     if (defType.toLowerCase() === "openapi") return false;
-    const rt = (p.releaseType || "").toLowerCase();
-    if (rt.includes("private")) return false;
-    const lc = (p.productLifecycle || "").toLowerCase();
-    if (lc.includes("private") || lc.includes("in dev")) return false;
     return true;
   });
 

@@ -71,7 +71,12 @@
 
   // ── Compute current step and action for a release plan ───────
   function computeCurrentStep(p) {
-    if (p.state === "Finished") return { status: "Released", action: "", statusClass: "step-released" };
+    const rt = (p.releaseType || "").toLowerCase();
+    const isPrivatePreview = rt.includes("private");
+    if (p.state === "Finished") {
+      if (isPrivatePreview) return { status: "Completed", action: "", statusClass: "step-released" };
+      return { status: "Released", action: "", statusClass: "step-released" };
+    }
 
     const specPrUrl = (p.apiSpec && p.apiSpec.specPrUrl) || "";
     const apiReady = (p.apiReadiness || "").toLowerCase();
@@ -252,9 +257,19 @@
       inProgress.sort(sortByReleaseMonth);
       partial.sort(sortByReleaseMonth);
       newItems.sort(sortByReleaseMonth);
-      finished.sort(sortByReleaseMonth);
+      // Filter finished: only this month or last month, max 20
+      const now = new Date();
+      const thisMonthKey = `${now.toLocaleString("en-US", { month: "long" })} ${now.getFullYear()}`.toLowerCase();
+      const lastDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const lastMonthKey = `${lastDate.toLocaleString("en-US", { month: "long" })} ${lastDate.getFullYear()}`.toLowerCase();
+      const recentFinished = finished.filter(p => {
+        const rm = (p.releaseMonth || "").toLowerCase();
+        return rm.includes(thisMonthKey) || rm.includes(lastMonthKey);
+      });
+      recentFinished.sort(sortByReleaseMonth);
+      const cappedFinished = recentFinished.slice(0, 20);
 
-      return { inProgress, partial, newItems, finished };
+      return { inProgress, partial, newItems, finished: cappedFinished };
     }
 
     const mgmtSplit = splitByState(mgmt);
@@ -407,10 +422,14 @@
       : rt.includes("ga") || rt.includes("stable")
         ? '<span class="badge badge-sdk-stable">Stable</span>'
         : "";
-    const stepHTML = step.status
+    const isTerminal = step.status === "Released" || step.status === "Completed";
+    const finishedBadge = (p.state === "Finished")
+      ? `<span class="badge badge-finished-indicator">✔ ${esc(step.status)}</span>`
+      : "";
+    const stepHTML = (step.status && !isTerminal)
       ? `<span class="step-badge ${step.statusClass}">${esc(step.status)}</span>`
       : "";
-    const actionHTML = step.action
+    const actionHTML = (step.action && !isTerminal)
       ? `<span class="action-badge">Action required from: ${esc(step.action)}</span>`
       : "";
     const dupHTML = p._duplicateOf
@@ -425,8 +444,8 @@
         </div>
         <div class="card-meta">
           ${p.releaseMonth ? `<span>${esc(p.releaseMonth)}</span>` : ""}
-
-          ${stepHTML}${actionHTML}${dupHTML}
+          ${p.submittedBy ? `<span class="card-submitter">${esc(p.submittedBy)}</span>` : ""}
+          ${stepHTML}${actionHTML}${finishedBadge}${dupHTML}
           ${apiReadinessBadge(p)}
           ${pastDue ? '<span class="badge badge-pastdue">Past Due</span>' : ""}
         </div>
@@ -439,12 +458,13 @@
   function prDetailLabels(l) {
     if (!l.prDetails) return "";
     const d = l.prDetails;
+    const isMerged = (l.sdkPrGitHubStatus || l.prStatus || "").toLowerCase().includes("merged");
     let labels = "";
     if (d.failedChecks && d.failedChecks.length) {
       const tipText = esc(d.failedChecks.join(", "));
       labels += `<span class="pr-label pr-label-failed" title="${tipText}">${d.failedChecks.length} check(s) failed</span>`;
     }
-    if (d.isApproved && d.approvedBy && d.approvedBy.length) {
+    if (!isMerged && d.isApproved && d.approvedBy && d.approvedBy.length) {
       const tipText = "Approved by: " + esc(d.approvedBy.join(", "));
       labels += `<span class="pr-label pr-label-approved" title="${tipText}">Approved</span>`;
     }
@@ -458,14 +478,20 @@
     const specPath = p.specProjectPath || p.typeSpecPath || "";
     const step = computeCurrentStep(p);
     let html = '<div class="detail-meta">';
-    // Current step highlight
-    if (step.status) {
+    // Current step highlight (hide for completed/released)
+    const detailTerminal = step.status === "Released" || step.status === "Completed";
+    if (step.status && !detailTerminal) {
       html += `<div class="detail-row detail-step-highlight">
         <strong>Current stage:</strong> <span class="step-badge ${step.statusClass}">${esc(step.status)}</span>`;
       if (step.action) html += ` <strong>Action required from:</strong> <span class="action-badge">${esc(step.action)}</span>`;
       html += `</div>`;
     }
     if (specPath) html += `<div class="detail-row"><strong>Spec Project Path:</strong> ${esc(specPath)}</div>`;
+    // Work item link
+    if (p.releasePlanId) {
+      const wiUrl = `https://dev.azure.com/azure-sdk/Release/_workitems/edit/${p.id}`;
+      html += `<div class="detail-row"><strong>Release Plan:</strong> <a href="${esc(wiUrl)}" target="_blank" rel="noopener">#${esc(String(p.releasePlanId))}</a> <span class="wi-warning">⚠️ Do not modify directly — use the release plan agent</span></div>`;
+    }
     if (p.typeSpecPath && p.specProjectPath && p.typeSpecPath !== p.specProjectPath) {
       html += `<div class="detail-row" style="font-size:.8rem;color:#605e5c;"><em>DevOps TypeSpec Path: ${esc(p.typeSpecPath)}</em></div>`;
     }
@@ -491,8 +517,13 @@
       html += `</div></div>`;
     }
 
-    // SDK Languages table
+    // SDK Languages table (hide for private preview)
     {
+      const rpType = (p.releaseType || "").toLowerCase();
+      const isPrivPrev = rpType.includes("private");
+      if (isPrivPrev) {
+        html += `<div class="detail-group private-preview-notice"><p>SDKs are not generated or released for private preview release plans.</p></div>`;
+      } else {
       const langs = p.languages || {};
       const langKeys = Object.keys(langs);
       if (langKeys.length) {
@@ -511,9 +542,10 @@
           const prLabels = l.sdkPrUrl ? prDetailLabels(l) : "";
           const releaseDisplay = excluded ? "Excluded" : (l.releaseStatus || "");
 
-          // Package labels: version + namespace approval + new package + API review
+          // Package labels: version (hide if released) + namespace approval + new package + API review
           let pkgLabels = "";
-          if (l.pkgVersion) {
+          const isReleased = (l.releaseStatus || "").toLowerCase().includes("released");
+          if (l.pkgVersion && !isReleased) {
             pkgLabels += `<span class="pr-label pr-label-version">${esc(l.pkgVersion)}</span>`;
           }
           if (l.isNewPackage) {
@@ -538,6 +570,7 @@
         }
         html += "</tbody></table></div>";
       }
+      } // end else (not private preview)
     }
 
     // API Spec
@@ -613,11 +646,12 @@
             if (langData) langData.prDetails = d;
           }
           let labels = "";
+          const lazyMerged = (info.gitHubStatus || "").toLowerCase().includes("merged");
           if (d.failedChecks && d.failedChecks.length) {
             const tipText = esc(d.failedChecks.join(", "));
             labels += `<span class="pr-label pr-label-failed" title="${tipText}">${d.failedChecks.length} check(s) failed</span>`;
           }
-          if (d.isApproved && d.approvedBy && d.approvedBy.length) {
+          if (!lazyMerged && d.isApproved && d.approvedBy && d.approvedBy.length) {
             const tipText = "Approved by: " + esc(d.approvedBy.join(", "));
             labels += `<span class="pr-label pr-label-approved" title="${tipText}">Approved</span>`;
           }
