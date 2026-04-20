@@ -6,10 +6,12 @@
 
 Collect these details (do not use temporary values):
 
-- **Service Tree ID**: GUID format - confirm with user
-- **Product Service Tree ID**: GUID format - confirm with user
+- **TypeSpec project path**: Relative path to TypeSpec project root in azure-rest-api-specs repo. For e.g. `specification/contosowidgetmanager/Contoso.WidgetManager`
 - **Expected Release Timeline**: "Month YYYY" format
 - **SDK Release Type**: "beta" (preview) or "stable" (GA)
+- **TypeSpec pull request URL**: API spec pull request that contains the spec changes for the SDK.
+- **Service Tree ID**: This is Optional and only required if this is the first release plan created for the service. It's required for automatic KPI attestion in the service tree for your product. GUID format - confirm with user
+- **Product Service Tree ID**: This is Optional and only required if this is the first release plan created for the service. It's required for automatic KPI attestion in the service tree for your product. GUID format - confirm with user
 
 ## SDK Details Update
 
@@ -31,3 +33,15 @@ If SDK PRs exist:
 
 1. Ensure GitHub CLI authentication (`gh auth login`)
 2. Run `azsdk_link_sdk_pull_request_to_release_plan` for each PR
+
+## SDK pull request validation
+
+SDK pull request must target to one of the following language repos.
+| Repo | Language |
+|------|----------|
+| Azure/azure-sdk-for-go | Go |
+| Azure/azure-sdk-for-js | JavaScript |
+| Azure/azure-sdk-for-java | Java |
+| Azure/azure-sdk-for-net | .NET |
+| Azure/azure-sdk-for-python | Python |
+| Azure/azure-sdk-for-rust | Rust |
