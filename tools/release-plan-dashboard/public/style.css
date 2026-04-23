@@ -259,14 +259,74 @@ main { padding: 16px 24px 40px; max-width: 1600px; margin: 0 auto; }
   font-style: italic;
 }
 
+/* Action Required section */
+.action-required-section {
+  margin: 14px 0;
+  padding: 12px 16px;
+  background: #fff8e1;
+  border: 1px solid #ffc107;
+  border-left: 4px solid #ff9800;
+  border-radius: var(--radius);
+}
+.action-required-section h4 {
+  color: #e65100;
+  margin-bottom: 8px;
+  font-size: .92rem;
+}
+.action-from-label {
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  background: #fff3e0;
+  border-radius: 4px;
+  font-size: .88rem;
+  color: #bf360c;
+  display: inline-block;
+}
+.action-item { margin-bottom: 10px; font-size: .85rem; }
+.action-item strong { color: #333; }
+.action-item ol { margin: 4px 0 0 20px; padding: 0; }
+.action-item li { margin: 3px 0; }
+.action-item p { margin: 4px 0; }
+.action-item ul { margin: 4px 0 0 20px; padding: 0; }
+.action-item-warning { border-left: 3px solid var(--red); padding-left: 10px; }
+.action-prompt {
+  margin: 4px 0 4px 0;
+  padding: 6px 10px;
+  background: #f5f5f5;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: .82rem;
+  word-break: break-all;
+}
+.action-prompt code { background: none; padding: 0; font-size: .82rem; color: #333; }
+.action-note {
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: #f0f4ff;
+  border-radius: 4px;
+  font-size: .82rem;
+  color: #444;
+}
+.action-note .action-prompt { background: #e8ecf5; border-color: #c5cde0; }
+
+/* Agent documentation link */
+.detail-agent-link {
+  margin-top: 12px;
+  padding: 8px 0;
+  font-size: .82rem;
+  border-top: 1px solid #e1dfdd;
+}
+.detail-agent-link a { color: var(--azure-blue); text-decoration: none; }
+.detail-agent-link a:hover { text-decoration: underline; }
+
 /* Product collapsible section */
-.product-toggle {
+.product-toggle, .sdk-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
 }
-.product-toggle:hover { color: var(--azure-blue); }
-.product-caret { font-size: .7rem; width: 14px; flex-shrink: 0; color: var(--gray); }
+.product-toggle:hover, .sdk-toggle:hover { color: var(--azure-blue); }
+.product-caret, .sdk-caret { font-size: .7rem; width: 14px; flex-shrink: 0; color: var(--gray); }
 .product-details { padding: 4px 0 4px 20px; }
 
 /* PR detail labels */

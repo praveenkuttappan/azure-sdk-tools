@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const AUTO_REFRESH_INTERVAL = 60 * 60; // seconds (1 hour)
+  const AUTO_REFRESH_INTERVAL = 5 * 60; // seconds (5 minutes)
   let refreshCountdown = AUTO_REFRESH_INTERVAL;
   let countdownTimer = null;
   let allPlans = [];
@@ -26,6 +26,14 @@
   async function fetchPlans() {
     showLoading(true);
     hideError();
+
+    // Remember which cards are expanded before re-render
+    const expandedIds = new Set();
+    document.querySelectorAll(".card-summary.expanded").forEach(el => {
+      const card = el.closest(".plan-card");
+      if (card && card.dataset.planId) expandedIds.add(card.dataset.planId);
+    });
+
     try {
       const params = new URLSearchParams(window.location.search);
       const planId = params.get("releasePlan") || params.get("releaseplan");
@@ -47,6 +55,24 @@
 
       render(allPlans);
       updateTimestamp(data.fetchedAt);
+
+      // Restore expanded cards after render
+      if (expandedIds.size) {
+        document.querySelectorAll(".plan-card").forEach(cardEl => {
+          if (expandedIds.has(cardEl.dataset.planId)) {
+            const summary = cardEl.querySelector(".card-summary");
+            const details = cardEl.querySelector(".card-details");
+            if (summary && details) {
+              details.classList.add("open");
+              summary.classList.add("expanded");
+              if (!summary.dataset.prLoaded) {
+                summary.dataset.prLoaded = "1";
+                lazyLoadPrDetails(details, cardEl);
+              }
+            }
+          }
+        });
+      }
     } catch (err) {
       showError(err.message);
     } finally {
@@ -391,6 +417,22 @@
         }
       });
     });
+    // Attach SDK details toggle handlers
+    container.querySelectorAll(".sdk-toggle").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        if (e.target.closest("a")) return;
+        e.stopPropagation();
+        const content = el.nextElementSibling;
+        const caret = el.querySelector(".sdk-caret");
+        if (content.style.display === "none") {
+          content.style.display = "";
+          if (caret) caret.innerHTML = "&#9660;";
+        } else {
+          content.style.display = "none";
+          if (caret) caret.innerHTML = "&#9654;";
+        }
+      });
+    });
   }
 
   function updateCount(sectionId, count) {
@@ -475,6 +517,193 @@
     return labels;
   }
 
+  // ── Action Required guidance ─────────────────────────────────
+  function actionRequiredHTML(p) {
+    const step = computeCurrentStep(p);
+    const isTerminal = step.status === "Released" || step.status === "Completed";
+    if (isTerminal || p.state === "Finished") return "";
+
+    const specPath = p.specProjectPath || p.typeSpecPath || "";
+    const specPrUrl = (p.apiSpec && p.apiSpec.specPrUrl) || "";
+    const planId = p.releasePlanId || "";
+    let actionContent = "";
+
+    if (step.status === "API Spec Not Available") {
+      if (!specPrUrl) {
+        actionContent = `<div class="action-item">
+          <strong>Create API Spec PR:</strong>
+          <ol>
+            <li>Clone the <code>azure-rest-api-specs</code> repo</li>
+            <li>Open <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">copilot-cli</a> from the cloned repo path, or open the cloned repo in VS Code and open GitHub Copilot chat</li>
+            <li>Run the following prompt:
+              <div class="action-prompt"><code>Create or update API spec for my service, create a spec PR, and update the spec PR in release plan ${esc(planId)}</code></div>
+            </li>
+          </ol>
+        </div>`;
+      }
+    } else if (step.status === "API Spec In Progress") {
+      actionContent = `<div class="action-item">
+        <strong>Get API Spec Reviewed & Merged:</strong>
+        <p>The spec PR <a href="${esc(specPrUrl)}" target="_blank" rel="noopener">${esc(specPrUrl)}</a> needs to be reviewed and merged before SDK generation can proceed.</p>
+      </div>`;
+    } else if (step.status === "SDK To Be Generated" || step.status === "SDK Generation Failed") {
+      actionContent = `<div class="action-item">
+        <strong>Generate SDKs:</strong>
+        <ol>
+          <li>Clone the <code>azure-rest-api-specs</code> repo</li>
+          <li>Open <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">copilot-cli</a> from the cloned repo path, or open the cloned repo in VS Code and open GitHub Copilot chat</li>
+          <li>Run the following prompt:
+            <div class="action-prompt"><code>Generate SDK for all languages from my TypeSpec project ${esc(specPath)} and link SDK pull requests to the release plan ${esc(planId)}</code></div>
+          </li>
+        </ol>
+      </div>`;
+    } else if (step.status === "SDK Review In Progress") {
+      actionContent = `<div class="action-item">
+        <strong>SDK PRs Under Review:</strong>
+        <p>SDK pull requests are currently being reviewed. Please ensure all required reviews are addressed.</p>
+      </div>`;
+    } else if (step.status === "SDK To Be Merged") {
+      actionContent = `<div class="action-item">
+        <strong>Merge SDK PRs:</strong>
+        <p>SDK pull requests are approved and ready to be merged.</p>
+      </div>`;
+    } else if (step.status === "SDK Ready To Be Released") {
+      // Build list of languages with merged PRs but not yet released
+      const langs = p.languages || {};
+      const langKeys = Object.keys(langs);
+      const toRelease = langKeys.filter(k => {
+        if (isLangExcluded(langs[k].exclusionStatus)) return false;
+        const st = (langs[k].sdkPrGitHubStatus || langs[k].prStatus || "").toLowerCase();
+        const rel = (langs[k].releaseStatus || "").toLowerCase();
+        return (st.includes("merged") || st.includes("completed")) && !rel.includes("completed") && !rel.includes("released");
+      });
+      const langList = toRelease.length ? toRelease.join(", ") : "all pending languages";
+      const pkgNames = toRelease.map(k => langs[k].packageName).filter(Boolean).join(", ");
+      actionContent = `<div class="action-item">
+        <strong>Release SDKs (${esc(langList)}):</strong>
+        <ol>
+          <li>Open <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">copilot-cli</a> from the <code>azure-rest-api-specs</code> or SDK language repo path, or open the repo in VS Code and open GitHub Copilot chat</li>
+          <li>Run a prompt like:
+            <div class="action-prompt"><code>Release SDK ${esc(pkgNames || "package-name")} in ${esc(langList)}</code></div>
+          </li>
+          <li>After the build stage completes, approve the release stage in the release pipeline</li>
+        </ol>
+      </div>`;
+    }
+
+    // Check for SDK PRs with failed checks
+    {
+      const langs = p.languages || {};
+      const langsWithFailedChecks = Object.keys(langs).filter(k => {
+        if (isLangExcluded(langs[k].exclusionStatus)) return false;
+        const d = langs[k].prDetails;
+        return d && d.failedChecks && d.failedChecks.length > 0;
+      });
+      if (langsWithFailedChecks.length) {
+        for (const lang of langsWithFailedChecks) {
+          const l = langs[lang];
+          const prUrl = l.sdkPrUrl || "";
+          const prNum = prUrl.match(/\/pull\/(\d+)/);
+          const prNumber = prNum ? prNum[1] : "";
+          const pkgName = l.packageName || "package";
+          // Determine repo name from PR URL
+          const repoMatch = prUrl.match(/github\.com\/[^/]+\/([^/]+)\//);
+          const repoName = repoMatch ? repoMatch[1] : "azure-sdk-for-" + lang.toLowerCase();
+          actionContent += `<div class="action-item action-item-warning" style="margin-top:10px;">
+            <strong>⚠️ Fix check failures for ${esc(lang)}:</strong>
+            <ol>
+              <li>Clone the <code>${esc(repoName)}</code> repo and checkout the PR:
+                <div class="action-prompt"><code>gh pr checkout ${esc(prNumber)}</code></div>
+              </li>
+              <li>Open <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">copilot-cli</a> from the repo, or open the repo in VS Code and open GitHub Copilot chat</li>
+              <li>Run the following prompt:
+                <div class="action-prompt"><code>Run validation for SDK package ${esc(pkgName)} and fix any build errors (Apply API spec customization if customization is required to resolve build errors). If change log requires update then update the change log. Push changes to PR if validation is successful</code></div>
+              </li>
+            </ol>
+          </div>`;
+        }
+      }
+    }
+
+    // Check for SDK PRs in closed (not merged) status
+    {
+      const langs = p.languages || {};
+      const closedPrLangs = Object.keys(langs).filter(k => {
+        if (isLangExcluded(langs[k].exclusionStatus)) return false;
+        if (!langs[k].sdkPrUrl) return false;
+        const st = (langs[k].sdkPrGitHubStatus || langs[k].prStatus || "").toLowerCase();
+        return st === "closed";
+      });
+      if (closedPrLangs.length) {
+        const langList = closedPrLangs.join(", ");
+        actionContent += `<div class="action-item action-item-warning" style="margin-top:10px;">
+          <strong>⚠️ SDK PR closed for ${esc(langList)}:</strong>
+          <p>The SDK pull request has been closed without merging. You need to either:</p>
+          <ul>
+            <li><strong>Regenerate the SDK</strong> for ${esc(langList)} using the <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">Azure SDK Tools agent</a></li>
+            <li><strong>Link a different PR</strong> (if one exists) to the release plan using the prompt:
+              <div class="action-prompt"><code>Link SDK pull request &lt;PR link&gt; to release plan ${esc(planId)}</code></div>
+            </li>
+          </ul>
+        </div>`;
+      }
+    }
+
+    // Additional prompt: if package details are missing but spec info is available
+    const hasSpecInfo = specPrUrl || specPath;
+    if (hasSpecInfo) {
+      const langs = p.languages || {};
+      const missingPkgDetails = Object.keys(langs).some(k => !isLangExcluded(langs[k].exclusionStatus) && !langs[k].packageName);
+      if (missingPkgDetails) {
+        actionContent += `<div class="action-item" style="margin-top:10px;">
+          <strong>Update SDK details in release plan:</strong>
+          <p>Package details are missing for some languages. Run the following prompt using <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">copilot-cli</a> or VS Code GitHub Copilot chat:</p>
+          <div class="action-prompt"><code>Update SDK details in release plan ${esc(planId)} using the TypeSpec project path ${esc(specPath)}</code></div>
+        </div>`;
+      }
+    }
+
+    if (!actionContent) return "";
+
+    // Determine who action is required from
+    const actionFrom = [];
+    {
+      const langs = p.languages || {};
+      let needsServiceTeam = false;
+      let needsReviewTeam = false;
+      for (const k of Object.keys(langs)) {
+        if (isLangExcluded(langs[k].exclusionStatus)) continue;
+        const st = (langs[k].sdkPrGitHubStatus || langs[k].prStatus || "").toLowerCase();
+        const d = langs[k].prDetails;
+        // Failed checks or closed PR → service team
+        if ((d && d.failedChecks && d.failedChecks.length > 0) || st === "closed") {
+          needsServiceTeam = true;
+        }
+        // Open PR → review team
+        if (st === "open") {
+          needsReviewTeam = true;
+        }
+      }
+      // Non-PR actions (spec not ready, SDK not generated) → service team
+      if (step.status === "API Spec Not Available" || step.status === "API Spec In Progress" ||
+          step.status === "SDK To Be Generated" || step.status === "SDK Generation Failed" ||
+          step.status === "SDK Ready To Be Released") {
+        needsServiceTeam = true;
+      }
+      if (needsServiceTeam) actionFrom.push("Service Team");
+      if (needsReviewTeam) actionFrom.push("SDK PR Reviewer");
+    }
+    const actionFromHTML = actionFrom.length
+      ? `<div class="action-from-label">Action required from: <strong>${esc(actionFrom.join(" & "))}</strong></div>`
+      : "";
+
+    return `<div class="action-required-section">
+      <h4>⚡ Action Required</h4>
+      ${actionFromHTML}
+      ${actionContent}
+    </div>`;
+  }
+
   function detailHTML(p) {
     const specPath = p.specProjectPath || p.typeSpecPath || "";
     const step = computeCurrentStep(p);
@@ -528,10 +757,18 @@
       const langs = p.languages || {};
       const langKeys = Object.keys(langs);
       if (langKeys.length) {
-        html += `<div class="detail-group"><h4>SDK Details</h4>
+        // Determine if any SDK PR exists to decide expanded vs collapsed
+        const hasAnyPr = langKeys.some(k => langs[k].sdkPrUrl && !isLangExcluded(langs[k].exclusionStatus));
+        const sdkDisplay = hasAnyPr ? "" : "display:none;";
+        const sdkCaret = hasAnyPr ? "&#9660;" : "&#9654;";
+        html += `<div class="detail-group sdk-collapsible">
+        <h4 class="sdk-toggle" style="cursor:pointer;user-select:none;">
+          <span class="sdk-caret">${sdkCaret}</span> SDK Details
+        </h4>
+        <div class="sdk-details-content" style="${sdkDisplay}">
         <table class="sdk-table"><thead><tr>
           <th>Language</th><th>Package</th><th>SDK PR</th><th>PR Status</th>
-          <th>Release Status</th>
+          <th>APIView</th><th>Release Status</th>
         </tr></thead><tbody>`;
         for (const lang of langKeys) {
           const l = langs[lang];
@@ -561,15 +798,21 @@
             pkgLabels += `<span class="pr-label ${arClass}">API: ${esc(l.apiReviewStatus)}</span>`;
           }
 
+          // APIView column placeholder — populated via lazy load
+          const apiViewCell = l.sdkPrUrl
+            ? `<span class="apiview-placeholder">Loading…</span>`
+            : "—";
+
           html += `<tr${rowClass}>
             <td><strong>${esc(lang)}</strong></td>
             <td>${esc(l.packageName) || "—"} ${pkgLabels}</td>
             <td>${prLink} ${prLabels}</td>
             <td>${statusSpan(l.sdkPrGitHubStatus || l.prStatus)}</td>
+            <td class="apiview-cell">${apiViewCell}</td>
             <td>${statusSpan(releaseDisplay)}</td>
           </tr>`;
         }
-        html += "</tbody></table></div>";
+        html += "</tbody></table></div></div>";
       }
       } // end else (not private preview)
     }
@@ -596,6 +839,21 @@
     if (p.sdkLanguages) {
       html += `<div class="detail-row"><strong>SDK Languages:</strong> ${esc(p.sdkLanguages)}</div>`;
     }
+
+    // Action Required guidance
+    html += actionRequiredHTML(p);
+
+    // Link a different SDK PR (standalone section, outside action required)
+    if (p.releasePlanId && p.state !== "Finished") {
+      const planId = p.releasePlanId || "";
+      html += `<div class="action-note">
+        <strong>💡 Link a different SDK PR:</strong> Use the <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">Azure SDK Tools agent</a> in Copilot CLI or VS Code and run:
+        <div class="action-prompt"><code>Link SDK pull request &lt;PR link&gt; to release plan ${esc(planId)}</code></div>
+      </div>`;
+    }
+
+    // azsdk agent documentation link
+    html += `<div class="detail-agent-link">📘 <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">How to use Azure SDK Tools agent to manage release plan and SDK?</a></div>`;
 
     return html;
   }
@@ -664,6 +922,17 @@
             if (prTd) prTd.insertAdjacentHTML("beforeend", " " + labels);
           }
         }
+
+        // Update APIView cell (index 4) — outside prDetails check
+        const apiViewTd = row.children[4];
+        if (apiViewTd && apiViewTd.classList.contains("apiview-cell")) {
+          const apiViewUrl = info.prDetails && info.prDetails.apiViewUrl;
+          if (apiViewUrl) {
+            apiViewTd.innerHTML = `<a href="${esc(apiViewUrl)}" target="_blank" rel="noopener">APIView</a>`;
+          } else {
+            apiViewTd.textContent = "Not available";
+          }
+        }
       }
 
       // Recompute step badges after PR details are loaded
@@ -687,6 +956,25 @@
           el.textContent = step.action || "";
           el.style.display = step.action ? "" : "none";
         });
+
+        // Re-render Action Required section with updated PR details
+        const oldAction = detailsEl.querySelector(".action-required-section");
+        const newActionHTML = actionRequiredHTML(plan);
+        if (oldAction) {
+          if (newActionHTML) {
+            oldAction.outerHTML = newActionHTML;
+          } else {
+            oldAction.remove();
+          }
+        } else if (newActionHTML) {
+          // Insert before the link-note or agent-link at the bottom
+          const insertBefore = detailsEl.querySelector(".action-note") || detailsEl.querySelector(".detail-agent-link");
+          if (insertBefore) {
+            insertBefore.insertAdjacentHTML("beforebegin", newActionHTML);
+          } else {
+            detailsEl.insertAdjacentHTML("beforeend", newActionHTML);
+          }
+        }
       }
     } catch (err) {
       console.warn("Failed to load PR details:", err);
