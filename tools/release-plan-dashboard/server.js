@@ -231,6 +231,7 @@ async function getGitHubPrStatus(prUrl) {
   const data = await githubRequest(`/repos/${pr.owner}/${pr.repo}/pulls/${pr.number}`);
   if (!data) return null;
   if (data.merged_at || data.merged) return "merged";
+  if (data.draft) return "draft";
   return data.state || "unknown";
 }
 
@@ -240,6 +241,7 @@ async function getGitHubPrStatusWithToken(token, prUrl) {
   const data = await githubRequestWithToken(token, `/repos/${pr.owner}/${pr.repo}/pulls/${pr.number}`);
   if (!data) return null;
   if (data.merged_at || data.merged) return "merged";
+  if (data.draft) return "draft";
   return data.state || "unknown";
 }
 

@@ -1272,6 +1272,7 @@
   function prStatusBadge(status) {
     const st = (status || "").toLowerCase();
     if (st.includes("merged")) return '<span class="badge badge-finished">Merged</span>';
+    if (st === "draft") return '<span class="badge badge-new">Draft</span>';
     if (st === "open") return '<span class="badge badge-inprogress">Open</span>';
     if (st === "closed") return '<span class="badge badge-pastdue">Closed</span>';
     return status ? `<span class="badge badge-new">${esc(status)}</span>` : "";
