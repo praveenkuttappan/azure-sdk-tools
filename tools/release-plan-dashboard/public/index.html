@@ -19,6 +19,13 @@
     </div>
   </header>
 
+  <div class="tab-bar">
+    <button class="tab-btn active" data-tab="tab-release-plans">Release Plans</button>
+    <button class="tab-btn" data-tab="tab-sdk-prs">SDK Pull Requests</button>
+  </div>
+
+  <div id="tab-release-plans" class="tab-content active">
+
   <div id="stats-bar" class="stats-bar" hidden>
     <div class="stat"><span id="stat-total" class="stat-value">0</span><span class="stat-label">Total</span></div>
     <div class="stat"><span id="stat-inprogress" class="stat-value">0</span><span class="stat-label">In Progress</span></div>
@@ -103,6 +110,32 @@
       </div>
     </div>
   </main>
+
+  </div><!-- end tab-release-plans -->
+
+  <div id="tab-sdk-prs" class="tab-content">
+    <div class="pr-filter-bar">
+      <select id="pr-filter-lang">
+        <option value="">All Languages</option>
+        <option value=".NET">.NET</option>
+        <option value="Java">Java</option>
+        <option value="JavaScript">JavaScript</option>
+        <option value="Python">Python</option>
+        <option value="Go">Go</option>
+      </select>
+      <select id="pr-filter-status">
+        <option value="">All Statuses</option>
+        <option value="open">Open</option>
+        <option value="draft">Draft</option>
+      </select>
+      <span id="pr-count" class="pr-count-label"></span>
+    </div>
+    <div id="pr-loading" class="loading" style="display:none;">
+      <div class="spinner"></div>
+      <p>Extracting pull requests&hellip;</p>
+    </div>
+    <div id="pr-list" class="pr-list"></div>
+  </div><!-- end tab-sdk-prs -->
 
   <script src="app.js"></script>
 </body>

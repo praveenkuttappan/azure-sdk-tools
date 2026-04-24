@@ -29,7 +29,7 @@
 
     // Remember which cards are expanded before re-render
     const expandedIds = new Set();
-    document.querySelectorAll(".card-summary.expanded").forEach(el => {
+    document.querySelectorAll("#tab-release-plans .card-summary.expanded").forEach(el => {
       const card = el.closest(".plan-card");
       if (card && card.dataset.planId) expandedIds.add(card.dataset.planId);
     });
@@ -58,7 +58,7 @@
 
       // Restore expanded cards after render
       if (expandedIds.size) {
-        document.querySelectorAll(".plan-card").forEach(cardEl => {
+        document.querySelectorAll("#tab-release-plans .plan-card").forEach(cardEl => {
           if (expandedIds.has(cardEl.dataset.planId)) {
             const summary = cardEl.querySelector(".card-summary");
             const details = cardEl.querySelector(".card-details");
@@ -73,6 +73,26 @@
           }
         });
       }
+
+      // Auto-expand all cards when viewing a single release plan via URL param
+      if (planId) {
+        document.querySelectorAll("#tab-release-plans .plan-card").forEach(cardEl => {
+          const summary = cardEl.querySelector(".card-summary");
+          const details = cardEl.querySelector(".card-details");
+          if (summary && details && !details.classList.contains("open")) {
+            details.classList.add("open");
+            summary.classList.add("expanded");
+            if (!summary.dataset.prLoaded) {
+              summary.dataset.prLoaded = "1";
+              lazyLoadPrDetails(details, cardEl);
+            }
+          }
+        });
+      }
+
+      // Initialize PR tab data (details loaded on-demand per card)
+      allPRs = extractAllPRs(allPlans);
+      renderFilteredPRs();
     } catch (err) {
       showError(err.message);
     } finally {
@@ -250,14 +270,20 @@
           (p) =>
             p.title.toLowerCase().includes(filter) ||
             (p.productName || "").toLowerCase().includes(filter) ||
+            (p.serviceName || "").toLowerCase().includes(filter) ||
             (p.ownerPM || "").toLowerCase().includes(filter) ||
             (p.submittedBy || "").toLowerCase().includes(filter) ||
-            String(p.releasePlanId).includes(filter)
+            String(p.releasePlanId || "").toLowerCase().includes(filter)
         )
       : plans;
 
     const mgmt = filtered.filter((p) => classifyPlane(p) === "mgmt");
     const data = filtered.filter((p) => classifyPlane(p) === "data");
+
+    // Detect if filtering is active (needed by splitByState)
+    const params = new URLSearchParams(window.location.search);
+    const singlePlan = params.get("releasePlan") || params.get("releaseplan");
+    const isFiltering = !!(filter || singlePlan);
 
     function sortByReleaseMonth(a, b) {
       return parseReleaseMonth(a.releaseMonth) - parseReleaseMonth(b.releaseMonth);
@@ -284,7 +310,13 @@
       inProgress.sort(sortByReleaseMonth);
       partial.sort(sortByReleaseMonth);
       newItems.sort(sortByReleaseMonth);
-      // Filter finished: only this month or last month, max 20
+
+      // When filtering/searching, show all finished plans that match;
+      // otherwise limit to this/last month, max 20
+      if (isFiltering) {
+        finished.sort(sortByReleaseMonth);
+        return { inProgress, partial, newItems, finished };
+      }
       const now = new Date();
       const thisMonthKey = `${now.toLocaleString("en-US", { month: "long" })} ${now.getFullYear()}`.toLowerCase();
       const lastDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
@@ -321,11 +353,6 @@
     updateCount("section-data-partial", dataSplit.partial.length);
     updateCount("section-data-new", dataSplit.newItems.length);
     updateCount("section-data-finished", dataSplit.finished.length);
-
-    // Detect if filtering is active
-    const params = new URLSearchParams(window.location.search);
-    const singlePlan = params.get("releasePlan") || params.get("releaseplan");
-    const isFiltering = !!(filter || singlePlan);
 
     // Hide empty sections when filtering; show all when not filtering
     const sectionCounts = {
@@ -441,6 +468,13 @@
     span.textContent = `(${count})`;
   }
 
+  function shortDate(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (isNaN(d)) return "";
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  }
+
   // ── Card HTML ───────────────────────────────────────────────
   function apiReadinessBadge(p) {
     if (p.apiReadiness === "completed") {
@@ -488,6 +522,8 @@
         <div class="card-meta">
           ${p.releaseMonth ? `<span>${esc(p.releaseMonth)}</span>` : ""}
           ${p.submittedBy ? `<span class="card-submitter">${esc(p.submittedBy)}</span>` : ""}
+          ${p.createdDate ? `<span class="card-date" title="Created on">Created: ${shortDate(p.createdDate)}</span>` : ""}
+          ${p.lastActivity ? `<span class="card-date" title="Last activity">Activity: ${shortDate(p.lastActivity)}</span>` : ""}
           ${stepHTML}${actionHTML}${finishedBadge}${dupHTML}
           ${apiReadinessBadge(p)}
           ${pastDue ? '<span class="badge badge-pastdue">Past Due</span>' : ""}
@@ -502,8 +538,10 @@
     if (!l.prDetails) return "";
     const d = l.prDetails;
     const isMerged = (l.sdkPrGitHubStatus || l.prStatus || "").toLowerCase().includes("merged");
+    const isClosed = (l.sdkPrGitHubStatus || l.prStatus || "").toLowerCase() === "closed";
+    const isOpenOrDraft = !isMerged && !isClosed;
     let labels = "";
-    if (d.failedChecks && d.failedChecks.length) {
+    if (isOpenOrDraft && d.failedChecks && d.failedChecks.length) {
       const tipText = esc(d.failedChecks.join(", "));
       labels += `<span class="pr-label pr-label-failed" title="${tipText}">${d.failedChecks.length} check(s) failed</span>`;
     }
@@ -596,6 +634,9 @@
       const langs = p.languages || {};
       const langsWithFailedChecks = Object.keys(langs).filter(k => {
         if (isLangExcluded(langs[k].exclusionStatus)) return false;
+        // Only show check failures for open/draft PRs, not merged
+        const st = (langs[k].sdkPrGitHubStatus || langs[k].prStatus || "").toLowerCase();
+        if (st.includes("merged") || st === "closed") return false;
         const d = langs[k].prDetails;
         return d && d.failedChecks && d.failedChecks.length > 0;
       });
@@ -675,8 +716,10 @@
         if (isLangExcluded(langs[k].exclusionStatus)) continue;
         const st = (langs[k].sdkPrGitHubStatus || langs[k].prStatus || "").toLowerCase();
         const d = langs[k].prDetails;
-        // Failed checks or closed PR → service team
-        if ((d && d.failedChecks && d.failedChecks.length > 0) || st === "closed") {
+        // Failed checks on open/draft PR or closed PR → service team
+        if (st === "closed") {
+          needsServiceTeam = true;
+        } else if (!st.includes("merged") && d && d.failedChecks && d.failedChecks.length > 0) {
           needsServiceTeam = true;
         }
         // Open PR → review team
@@ -798,10 +841,15 @@
             pkgLabels += `<span class="pr-label ${arClass}">API: ${esc(l.apiReviewStatus)}</span>`;
           }
 
-          // APIView column placeholder — populated via lazy load
-          const apiViewCell = l.sdkPrUrl
-            ? `<span class="apiview-placeholder">Loading…</span>`
-            : "—";
+          // APIView column — loaded on-demand when card is expanded
+          let apiViewCell = "—";
+          if (l.sdkPrUrl) {
+            if (l.prDetails && l.prDetails.apiViewUrl) {
+              apiViewCell = `<a href="${esc(l.prDetails.apiViewUrl)}" target="_blank" rel="noopener">APIView</a>`;
+            } else {
+              apiViewCell = `<span class="apiview-placeholder">…</span>`;
+            }
+          }
 
           html += `<tr${rowClass}>
             <td><strong>${esc(lang)}</strong></td>
@@ -860,7 +908,6 @@
 
   // ── Lazy load PR details on card expand ─────────────────────
   async function lazyLoadPrDetails(detailsEl, cardEl) {
-    // Collect all SDK PR links within this card's details
     const prLinks = detailsEl.querySelectorAll("td a[href*='github.com']");
     const urls = [...new Set([...prLinks].map(a => a.href).filter(Boolean))];
     if (!urls.length) return;
@@ -876,18 +923,15 @@
       const details = data.details || {};
       const plan = cardEl && cardEl._planData;
 
-      // Update each PR row with GitHub status and detail labels
       for (const link of prLinks) {
         const info = details[link.href];
         if (!info) continue;
         const row = link.closest("tr");
         if (!row) continue;
 
-        // Update PR Status column (4th td, index 3)
         if (info.gitHubStatus) {
           const statusTd = row.children[3];
           if (statusTd) statusTd.innerHTML = statusSpan(info.gitHubStatus);
-          // Update plan data for step recomputation
           if (plan) {
             const langName = row.children[0] && row.children[0].textContent.trim();
             const langData = langName && plan.languages && plan.languages[langName];
@@ -895,10 +939,8 @@
           }
         }
 
-        // Append detail labels (checks, approval, mergeable) next to PR link
         if (info.prDetails) {
           const d = info.prDetails;
-          // Update plan data for step recomputation
           if (plan) {
             const langName = row.children[0] && row.children[0].textContent.trim();
             const langData = langName && plan.languages && plan.languages[langName];
@@ -906,7 +948,9 @@
           }
           let labels = "";
           const lazyMerged = (info.gitHubStatus || "").toLowerCase().includes("merged");
-          if (d.failedChecks && d.failedChecks.length) {
+          const lazyClosed = (info.gitHubStatus || "").toLowerCase() === "closed";
+          const lazyOpenOrDraft = !lazyMerged && !lazyClosed;
+          if (lazyOpenOrDraft && d.failedChecks && d.failedChecks.length) {
             const tipText = esc(d.failedChecks.join(", "));
             labels += `<span class="pr-label pr-label-failed" title="${tipText}">${d.failedChecks.length} check(s) failed</span>`;
           }
@@ -923,22 +967,17 @@
           }
         }
 
-        // Update APIView cell (index 4) — outside prDetails check
         const apiViewTd = row.children[4];
         if (apiViewTd && apiViewTd.classList.contains("apiview-cell")) {
           const apiViewUrl = info.prDetails && info.prDetails.apiViewUrl;
-          if (apiViewUrl) {
-            apiViewTd.innerHTML = `<a href="${esc(apiViewUrl)}" target="_blank" rel="noopener">APIView</a>`;
-          } else {
-            apiViewTd.textContent = "Not available";
-          }
+          apiViewTd.innerHTML = apiViewUrl
+            ? `<a href="${esc(apiViewUrl)}" target="_blank" rel="noopener">APIView</a>`
+            : "Not available";
         }
       }
 
-      // Recompute step badges after PR details are loaded
       if (plan && cardEl) {
         const step = computeCurrentStep(plan);
-        // Update summary badges (now in .card-meta)
         cardEl.querySelectorAll(".card-meta .step-badge").forEach(el => {
           el.className = `step-badge ${step.statusClass}`;
           el.textContent = step.status;
@@ -947,7 +986,6 @@
           el.textContent = step.action || "";
           el.style.display = step.action ? "" : "none";
         });
-        // Update detail step highlight
         detailsEl.querySelectorAll(".detail-step-highlight .step-badge").forEach(el => {
           el.className = `step-badge ${step.statusClass}`;
           el.textContent = step.status;
@@ -957,23 +995,15 @@
           el.style.display = step.action ? "" : "none";
         });
 
-        // Re-render Action Required section with updated PR details
         const oldAction = detailsEl.querySelector(".action-required-section");
         const newActionHTML = actionRequiredHTML(plan);
         if (oldAction) {
-          if (newActionHTML) {
-            oldAction.outerHTML = newActionHTML;
-          } else {
-            oldAction.remove();
-          }
+          if (newActionHTML) oldAction.outerHTML = newActionHTML;
+          else oldAction.remove();
         } else if (newActionHTML) {
-          // Insert before the link-note or agent-link at the bottom
           const insertBefore = detailsEl.querySelector(".action-note") || detailsEl.querySelector(".detail-agent-link");
-          if (insertBefore) {
-            insertBefore.insertAdjacentHTML("beforebegin", newActionHTML);
-          } else {
-            detailsEl.insertAdjacentHTML("beforeend", newActionHTML);
-          }
+          if (insertBefore) insertBefore.insertAdjacentHTML("beforebegin", newActionHTML);
+          else detailsEl.insertAdjacentHTML("beforeend", newActionHTML);
         }
       }
     } catch (err) {
@@ -1105,7 +1135,336 @@
   let searchTimeout = null;
   $("#search-box").addEventListener("input", () => {
     clearTimeout(searchTimeout);
-    searchTimeout = setTimeout(() => render(allPlans), 250);
+    searchTimeout = setTimeout(async () => {
+      render(allPlans);
+      renderFilteredPRs();
+      // If filter looks like a plan ID and no results found locally, try server lookup
+      const filter = ($("#search-box").value || "").trim();
+      if (/^\d+$/.test(filter)) {
+        const found = allPlans.some(p => String(p.releasePlanId) === filter || String(p.id) === filter);
+        if (!found) {
+          try {
+            const res = await fetch(`/api/release-plans?releasePlan=${encodeURIComponent(filter)}`);
+            if (res.ok) {
+              const data = await res.json();
+              if (data.plans && data.plans.length) {
+                for (const plan of data.plans) {
+                  if (!allPlans.some(p => p.id === plan.id)) allPlans.push(plan);
+                }
+                render(allPlans);
+                allPRs = extractAllPRs(allPlans);
+                renderFilteredPRs();
+              }
+            }
+          } catch { /* ignore */ }
+        }
+      }
+    }, 250);
+  });
+
+  // ══════════════════════════════════════════════════════════════
+  // ── Tab switching ─────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════
+  const tabBtns = document.querySelectorAll(".tab-btn");
+  const tabContents = document.querySelectorAll(".tab-content");
+
+  tabBtns.forEach(btn => {
+    btn.addEventListener("click", () => {
+      const targetId = btn.dataset.tab;
+      tabBtns.forEach(b => b.classList.remove("active"));
+      tabContents.forEach(tc => tc.classList.remove("active"));
+      btn.classList.add("active");
+      const target = document.getElementById(targetId);
+      if (target) target.classList.add("active");
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════
+  // ── SDK Pull Requests Tab ─────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════
+  let allPRs = [];
+  let prExpandedUrls = new Set();
+
+  function langBadgeClass(lang) {
+    const l = lang.toLowerCase().replace(/\./g, "");
+    if (l === "net") return "lang-badge-dotnet";
+    if (l === "java") return "lang-badge-java";
+    if (l === "javascript") return "lang-badge-javascript";
+    if (l === "python") return "lang-badge-python";
+    if (l === "go") return "lang-badge-go";
+    return "";
+  }
+
+  function extractAllPRs(plans) {
+    const seen = new Set(); // dedupe by prUrl+language
+    const prs = [];
+    for (const p of plans) {
+      if (!p.languages) continue;
+      if (p.state === "Finished") continue; // skip finished release plans
+      const rt = (p.releaseType || "").toLowerCase();
+      if (rt.includes("private")) continue; // skip private preview
+      for (const [lang, l] of Object.entries(p.languages)) {
+        if (isLangExcluded(l.exclusionStatus)) continue;
+        if (!l.sdkPrUrl) continue;
+        // Skip if already released for this language
+        const relSt = (l.releaseStatus || "").toLowerCase();
+        if (relSt.includes("released") || relSt === "completed") continue;
+        // Skip closed/merged/completed PRs — only show open (or unknown status) PRs
+        const prSt = (l.sdkPrGitHubStatus || l.prStatus || "").toLowerCase();
+        if (prSt === "closed" || prSt.includes("merged") || prSt === "completed") continue;
+        const dedupeKey = `${l.sdkPrUrl}|${lang}`;
+        if (seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+
+        // Parse repo/PR# from URL
+        const prMatch = l.sdkPrUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
+        const repo = prMatch ? prMatch[1] : "";
+        const prNumber = prMatch ? prMatch[2] : "";
+
+        prs.push({
+          prUrl: l.sdkPrUrl,
+          language: lang,
+          packageName: l.packageName || "",
+          releasePlanId: p.releasePlanId || "",
+          planTitle: p.title || "",
+          planId: p.id,
+          releaseMonth: p.releaseMonth || "",
+          releaseMonthDate: parseReleaseMonth(p.releaseMonth),
+          prStatus: l.sdkPrGitHubStatus || l.prStatus || "",
+          releaseStatus: l.releaseStatus || "",
+          repo,
+          prNumber,
+          prDetails: l.prDetails || null,
+          _statusLoaded: false,
+        });
+      }
+    }
+    // Sort by release month ascending, then plan ID
+    prs.sort((a, b) => {
+      const d = a.releaseMonthDate - b.releaseMonthDate;
+      if (d !== 0) return d;
+      return (a.releasePlanId || "").localeCompare(b.releasePlanId || "");
+    });
+    return prs;
+  }
+
+
+
+  function filterPRs(prs) {
+    const langFilter = (document.getElementById("pr-filter-lang") || {}).value || "";
+    const statusFilter = (document.getElementById("pr-filter-status") || {}).value || "";
+    const textFilter = ($("#search-box").value || "").toLowerCase();
+
+    return prs.filter(pr => {
+      if (langFilter && pr.language !== langFilter) return false;
+      if (statusFilter) {
+        const st = (pr.prStatus || "").toLowerCase();
+        if (st !== statusFilter) return false;
+      }
+      if (textFilter) {
+        const searchable = `${pr.language} ${pr.repo} ${pr.prNumber} ${pr.packageName} ${pr.planTitle} ${pr.releasePlanId} ${pr.prStatus}`.toLowerCase();
+        if (!searchable.includes(textFilter)) return false;
+      }
+      return true;
+    });
+  }
+
+  function prStatusBadge(status) {
+    const st = (status || "").toLowerCase();
+    if (st.includes("merged")) return '<span class="badge badge-finished">Merged</span>';
+    if (st === "open") return '<span class="badge badge-inprogress">Open</span>';
+    if (st === "closed") return '<span class="badge badge-pastdue">Closed</span>';
+    return status ? `<span class="badge badge-new">${esc(status)}</span>` : "";
+  }
+
+  function prCardHTML(pr) {
+    const displayName = pr.packageName
+      ? `${esc(pr.packageName)}`
+      : `${esc(pr.repo)}#${esc(pr.prNumber)}`;
+    const wiUrl = `https://dev.azure.com/azure-sdk/Release/_workitems/edit/${pr.planId}`;
+    return `
+    <div class="pr-card" data-pr-url="${esc(pr.prUrl)}">
+      <div class="pr-card-summary">
+        <span class="pr-card-chevron">&#9654;</span>
+        <div class="pr-card-title">
+          <span class="lang-badge ${langBadgeClass(pr.language)}">${esc(pr.language)}</span>
+          ${displayName}
+        </div>
+        <div class="pr-card-meta">
+          ${prStatusBadge(pr.prStatus)}
+          ${pr.prDetails && pr.prDetails.isApproved ? '<span class="pr-label pr-label-approved">Approved</span>' : ""}
+          ${pr.releaseMonth ? `<span>${esc(pr.releaseMonth)}</span>` : ""}
+          <span class="si-plan"><a href="/?releasePlan=${esc(String(pr.releasePlanId))}" title="View release plan #${esc(String(pr.releasePlanId))}">#${esc(String(pr.releasePlanId))}</a></span>
+        </div>
+      </div>
+      <div class="pr-card-details">
+        <div class="pr-detail-loading">Loading PR details…</div>
+      </div>
+    </div>`;
+  }
+
+  function prDetailHTML(pr, info) {
+    let html = "";
+    const title = (info && info.prDetails && info.prDetails.title) || "";
+    if (title) html += `<div class="pr-detail-row"><strong>Title:</strong> ${esc(title)}</div>`;
+    html += `<div class="pr-detail-row"><strong>PR:</strong> <a href="${esc(pr.prUrl)}" target="_blank" rel="noopener">${esc(pr.repo)}#${esc(pr.prNumber)}</a></div>`;
+    html += `<div class="pr-detail-row"><strong>Package:</strong> ${esc(pr.packageName) || "—"}</div>`;
+    html += `<div class="pr-detail-row"><strong>Language:</strong> ${esc(pr.language)}</div>`;
+
+    if (info && info.gitHubStatus) {
+      html += `<div class="pr-detail-row"><strong>Status:</strong> ${statusSpan(info.gitHubStatus)}</div>`;
+    }
+
+    const wiUrl = `https://dev.azure.com/azure-sdk/Release/_workitems/edit/${pr.planId}`;
+    html += `<div class="pr-detail-row"><strong>Release Plan:</strong> <a href="/?releasePlan=${esc(String(pr.releasePlanId))}">#${esc(String(pr.releasePlanId))}</a> — ${esc(pr.planTitle)} <a href="${esc(wiUrl)}" target="_blank" rel="noopener" style="font-size:.78rem;color:#605e5c;">(DevOps)</a></div>`;
+    if (pr.releaseMonth) html += `<div class="pr-detail-row"><strong>Target Release:</strong> ${esc(pr.releaseMonth)}</div>`;
+    if (pr.releaseStatus) html += `<div class="pr-detail-row"><strong>Release Status:</strong> ${statusSpan(pr.releaseStatus)}</div>`;
+
+    if (info && info.prDetails) {
+      const d = info.prDetails;
+      const st = (info.gitHubStatus || "").toLowerCase();
+      const prIsMerged = st.includes("merged");
+      const prIsClosed = st === "closed";
+      const prIsOpenOrDraft = !prIsMerged && !prIsClosed;
+      // Failed checks — only for open/draft PRs
+      if (prIsOpenOrDraft && d.failedChecks && d.failedChecks.length) {
+        html += `<div class="pr-detail-row" style="color:var(--red);"><strong>⚠️ Failed Checks (${d.failedChecks.length}):</strong> ${esc(d.failedChecks.join(", "))}</div>`;
+      }
+      // Approval
+      if (!prIsMerged && d.isApproved && d.approvedBy && d.approvedBy.length) {
+        html += `<div class="pr-detail-row"><strong>✅ Approved by:</strong> ${esc(d.approvedBy.join(", "))}</div>`;
+      }
+      // Reviewers
+      if (!prIsMerged && d.requestedReviewers && d.requestedReviewers.length) {
+        html += `<div class="pr-detail-row"><strong>Requested Reviewers:</strong> ${esc(d.requestedReviewers.join(", "))}</div>`;
+      }
+      // Mergeable
+      if (!prIsMerged && d.mergeable && d.mergeableState === "clean") {
+        html += `<div class="pr-detail-row"><strong>✅ Ready to merge</strong></div>`;
+      }
+      // APIView
+      if (d.apiViewUrl) {
+        html += `<div class="pr-detail-row"><strong>APIView:</strong> <a href="${esc(d.apiViewUrl)}" target="_blank" rel="noopener">View API Changes</a></div>`;
+      }
+      // Action required — only for open/draft or closed PRs, not merged
+      if (!prIsMerged) {
+        if (prIsOpenOrDraft && d.failedChecks && d.failedChecks.length) {
+          html += `<div class="action-required-section" style="margin-top:10px;"><h4>⚡ Action Required</h4><div class="action-from-label">Action required from: <strong>Service Team</strong></div><div class="action-item action-item-warning"><strong>Fix check failures:</strong> Clone the repo, checkout the PR, and use the <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">Azure SDK Tools agent</a> to resolve build errors.</div></div>`;
+        } else if (prIsClosed) {
+          html += `<div class="action-required-section" style="margin-top:10px;"><h4>⚡ Action Required</h4><div class="action-from-label">Action required from: <strong>Service Team</strong></div><div class="action-item action-item-warning"><strong>PR Closed:</strong> Regenerate the SDK or link a different PR to the release plan.</div></div>`;
+        } else if (prIsOpenOrDraft && !d.isApproved) {
+          html += `<div class="action-required-section" style="margin-top:10px;"><h4>⚡ Action Required</h4><div class="action-from-label">Action required from: <strong>SDK PR Reviewer</strong></div><div class="action-item"><strong>Review needed:</strong> This PR is awaiting review.</div></div>`;
+        }
+      }
+      // Latest comment
+      if (d.latestComment) {
+        const c = d.latestComment;
+        const dateStr = c.createdAt ? new Date(c.createdAt).toLocaleString() : "";
+        html += `<div class="pr-latest-comment"><strong>${esc(c.author)}</strong> <span style="color:#888;font-size:.75rem;">${esc(dateStr)}</span><br>${esc(c.body)}</div>`;
+      }
+    }
+
+    return html;
+  }
+
+  function renderFilteredPRs() {
+    // Remember expanded PR cards
+    document.querySelectorAll(".pr-card-summary.expanded").forEach(el => {
+      const card = el.closest(".pr-card");
+      if (card && card.dataset.prUrl) prExpandedUrls.add(card.dataset.prUrl);
+    });
+
+    const filtered = filterPRs(allPRs);
+    const countEl = document.getElementById("pr-count");
+    if (countEl) {
+      countEl.textContent = `${filtered.length} of ${allPRs.length} PRs`;
+    }
+
+    const container = document.getElementById("pr-list");
+    if (!filtered.length) {
+      container.innerHTML = '<p style="padding:8px;color:#605e5c;font-size:.88rem;">No pull requests found.</p>';
+      return;
+    }
+    container.innerHTML = filtered.map(prCardHTML).join("");
+
+    // Attach expand/collapse handlers
+    container.querySelectorAll(".pr-card-summary").forEach(el => {
+      el.addEventListener("click", (e) => {
+        if (e.target.closest("a")) return;
+        const details = el.nextElementSibling;
+        const opening = !details.classList.contains("open");
+        details.classList.toggle("open");
+        el.classList.toggle("expanded");
+        if (opening && !el.dataset.prLoaded) {
+          el.dataset.prLoaded = "1";
+          const card = el.closest(".pr-card");
+          lazyLoadPrCardDetails(card);
+        }
+      });
+    });
+
+    // Restore expanded cards
+    if (prExpandedUrls.size) {
+      container.querySelectorAll(".pr-card").forEach(card => {
+        if (prExpandedUrls.has(card.dataset.prUrl)) {
+          const summary = card.querySelector(".pr-card-summary");
+          const details = card.querySelector(".pr-card-details");
+          if (summary && details) {
+            details.classList.add("open");
+            summary.classList.add("expanded");
+            if (!summary.dataset.prLoaded) {
+              summary.dataset.prLoaded = "1";
+              lazyLoadPrCardDetails(card);
+            }
+          }
+        }
+      });
+    }
+  }
+
+  async function lazyLoadPrCardDetails(cardEl) {
+    const prUrl = cardEl.dataset.prUrl;
+    if (!prUrl) return;
+    const detailsEl = cardEl.querySelector(".pr-card-details");
+    if (!detailsEl) return;
+
+    const pr = allPRs.find(p => p.prUrl === prUrl);
+    if (!pr) return;
+
+    // If prDetails already loaded (from a previous expand), render directly
+    if (pr.prDetails) {
+      const info = { gitHubStatus: pr.prStatus, prDetails: pr.prDetails };
+      detailsEl.innerHTML = prDetailHTML(pr, info);
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/pr-details", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ urls: [prUrl] }),
+      });
+      if (!res.ok) {
+        detailsEl.innerHTML = '<div class="pr-detail-loading" style="color:var(--red);">Failed to load details.</div>';
+        return;
+      }
+      const data = await res.json();
+      const info = (data.details || {})[prUrl];
+      if (info) {
+        if (info.gitHubStatus) pr.prStatus = info.gitHubStatus;
+        if (info.prDetails) pr.prDetails = info.prDetails;
+      }
+      detailsEl.innerHTML = prDetailHTML(pr, info);
+    } catch (err) {
+      console.warn("Failed to load PR card details:", err);
+      detailsEl.innerHTML = '<div class="pr-detail-loading" style="color:var(--red);">Error loading details.</div>';
+    }
+  }
+
+  // PR tab dropdown filter listeners
+  ["pr-filter-lang", "pr-filter-status"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("change", () => renderFilteredPRs());
   });
 
   // ── Init ────────────────────────────────────────────────────

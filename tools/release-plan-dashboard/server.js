@@ -1,5 +1,5 @@
-// Release Plan Dashboard — Express server with GitHub OAuth and live API data.
-// DevOps + spec PR data fetched on page load; SDK PR details lazy-loaded on expand.
+// Release Plan Dashboard — Express server with GitHub OAuth and cached API data.
+// DevOps + GitHub PR data fetched and cached every 30 minutes using PAT.
 const express = require("express");
 const session = require("express-session");
 const https = require("https");
@@ -25,7 +25,7 @@ const DEVOPS_ORG = "https://dev.azure.com/azure-sdk";
 const DEVOPS_PROJECT = "Release";
 const API_VERSION = "7.1";
 const BATCH_SIZE = 200;
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 // ── In-memory caches ──────────────────────────────────────────
 const cache = {
@@ -120,6 +120,8 @@ app.use(express.json());
 function requireAuth(req, res, next) {
   if (["/auth/github","/auth/github/callback","/auth/logout","/login"].includes(req.path)) return next();
   if (req.session && req.session.user) return next();
+  // Save original URL so we can redirect back after login
+  if (req.session) req.session.returnTo = req.originalUrl;
   res.redirect("/login");
 }
 app.use(requireAuth);
@@ -159,7 +161,9 @@ app.get("/auth/github/callback", async (req, res) => {
     if (!isMember) return res.redirect(`/login?error=You+must+be+an+active+member+of+the+Microsoft+or+Azure+GitHub+org.`);
     req.session.user = { login: user.login, name: user.name || user.login, avatar: user.avatar_url || "" };
     req.session.githubToken = token;
-    res.redirect("/");
+    const returnTo = req.session.returnTo || "/";
+    delete req.session.returnTo;
+    res.redirect(returnTo);
   } catch (err) {
     console.error("OAuth error:", err);
     res.redirect("/login?error=Authentication+failed.");
@@ -262,7 +266,16 @@ async function getGitHubPrDetailsWithToken(token, prUrl) {
 }
 
 async function _buildPrDetailsResult(prData, reviews, pr, bearerToken) {
-  const result = { mergeable: prData.mergeable || false, mergeableState: prData.mergeable_state || "", isApproved: false, approvedBy: [], failedChecks: [], apiViewUrl: "" };
+  const result = {
+    mergeable: prData.mergeable || false, mergeableState: prData.mergeable_state || "",
+    isApproved: false, approvedBy: [], failedChecks: [], apiViewUrl: "",
+    title: prData.title || "", requestedReviewers: [], latestComment: null,
+    updatedAt: prData.updated_at || "",
+  };
+  // Requested reviewers from PR data
+  if (Array.isArray(prData.requested_reviewers)) {
+    result.requestedReviewers = prData.requested_reviewers.map(r => r.login).filter(Boolean);
+  }
   if (Array.isArray(reviews)) {
     const approvers = new Set();
     for (const r of reviews) { if (r.state === "APPROVED" && r.user) approvers.add(r.user.login); }
@@ -292,6 +305,16 @@ async function _buildPrDetailsResult(prData, reviews, pr, bearerToken) {
       : githubRequest(`/repos/${pr.owner}/${pr.repo}/issues/${pr.number}/comments?per_page=100`);
     const comments = await fetchComments;
     if (Array.isArray(comments)) {
+      // Latest non-bot comment (skip APIView / check bots)
+      for (let i = comments.length - 1; i >= 0; i--) {
+        const c = comments[i];
+        const login = (c.user && c.user.login) || "";
+        const isBot = login.includes("[bot]") || login.includes("bot") || (c.user && c.user.type === "Bot");
+        if (!isBot && c.body) {
+          result.latestComment = { author: login, body: c.body.substring(0, 300), createdAt: c.created_at || "" };
+          break;
+        }
+      }
       for (const c of comments) {
         const body = c.body || "";
         if (body.includes("API Change Check") || body.includes("APIView") || body.includes("apiview")) {
@@ -646,13 +669,17 @@ async function fetchAllReleasePlans() {
 async function enrichPlans(plans) {
   if (process.env.GITHUB_PAT_RELEASE_PLAN) {
     const specPrUrls = [];
+    const specPrUrlsForPath = []; // only fetch files if plan lacks a spec path
     for (const p of plans) {
       const specUrl = (p.apiSpec && p.apiSpec.specPrUrl) || "";
-      if (specUrl) specPrUrls.push(specUrl);
+      if (specUrl) {
+        specPrUrls.push(specUrl);
+        if (!p.typeSpecPath) specPrUrlsForPath.push(specUrl);
+      }
     }
     const [statusMap, specPathMap] = await Promise.all([
       batchFetchPrStatuses(specPrUrls),
-      batchFetchSpecProjectPaths(specPrUrls),
+      batchFetchSpecProjectPaths(specPrUrlsForPath),
     ]);
     for (const p of plans) {
       const specUrl = (p.apiSpec && p.apiSpec.specPrUrl) || "";
@@ -689,6 +716,35 @@ async function enrichPlans(plans) {
       }
     }
   } catch (err) { console.warn("Package enrichment error:", err.message); }
+
+  // Fetch SDK PR status only (open/merged/closed) — details fetched on-demand when card is expanded
+  if (process.env.GITHUB_PAT_RELEASE_PLAN) {
+    const sdkPrUrls = [];
+    for (const p of plans) {
+      for (const [, li] of Object.entries(p.languages || {})) {
+        if (li.sdkPrUrl) sdkPrUrls.push(li.sdkPrUrl);
+      }
+    }
+    const uniqueSdkPrUrls = [...new Set(sdkPrUrls.filter(Boolean))];
+    if (uniqueSdkPrUrls.length) {
+      console.log(`Fetching SDK PR statuses for ${uniqueSdkPrUrls.length} unique PRs...`);
+      const statusMap = await batchFetchPrStatuses(uniqueSdkPrUrls);
+      for (const p of plans) {
+        for (const [, li] of Object.entries(p.languages || {})) {
+          if (!li.sdkPrUrl) continue;
+          const st = statusMap.get(li.sdkPrUrl);
+          if (st) li.sdkPrGitHubStatus = st;
+        }
+      }
+      console.log(`SDK PR statuses fetched for ${uniqueSdkPrUrls.length} PRs.`);
+    }
+  }
+
+  // Compute lastActivity for each plan: latest of plan changedDate
+  for (const p of plans) {
+    let latest = p.changedDate ? new Date(p.changedDate).getTime() : 0;
+    p.lastActivity = latest ? new Date(latest).toISOString() : "";
+  }
 }
 
 // Refresh the release plans cache (called on interval and on first request).
@@ -721,7 +777,7 @@ async function getCachedReleasePlans() {
 // Supports ?releasePlan=<id> to filter to a specific plan (bypasses cache).
 app.get("/api/release-plans", async (req, res) => {
   try {
-    const filterPlanId = req.query.releasePlan || "";
+    const filterPlanId = req.query.releasePlan || req.query.releaseplan || "";
 
     if (filterPlanId) {
       // Single-plan lookup bypasses cache
@@ -790,7 +846,7 @@ app.post("/api/pr-details", async (req, res) => {
           ]);
           result[url] = {
             gitHubStatus: statusData || null,
-            prDetails: detailData ? { mergeable: detailData.mergeable, mergeableState: detailData.mergeableState, isApproved: detailData.isApproved, approvedBy: detailData.approvedBy, failedChecks: detailData.failedChecks, apiViewUrl: detailData.apiViewUrl || "" } : null,
+            prDetails: detailData ? { mergeable: detailData.mergeable, mergeableState: detailData.mergeableState, isApproved: detailData.isApproved, approvedBy: detailData.approvedBy, failedChecks: detailData.failedChecks, apiViewUrl: detailData.apiViewUrl || "", title: detailData.title || "", requestedReviewers: detailData.requestedReviewers || [], latestComment: detailData.latestComment || null, updatedAt: detailData.updatedAt || "" } : null,
           };
         } catch { result[url] = null; }
       }, { concurrency: 5, delayMs: 300 });
@@ -814,7 +870,7 @@ app.post("/api/pr-details", async (req, res) => {
           const d = detailMap.get(url) || null;
           const r = {
             gitHubStatus: statusMap.get(url) || null,
-            prDetails: d ? { mergeable: d.mergeable, mergeableState: d.mergeableState, isApproved: d.isApproved, approvedBy: d.approvedBy, failedChecks: d.failedChecks, apiViewUrl: d.apiViewUrl || "" } : null,
+            prDetails: d ? { mergeable: d.mergeable, mergeableState: d.mergeableState, isApproved: d.isApproved, approvedBy: d.approvedBy, failedChecks: d.failedChecks, apiViewUrl: d.apiViewUrl || "", title: d.title || "", requestedReviewers: d.requestedReviewers || [], latestComment: d.latestComment || null, updatedAt: d.updatedAt || "" } : null,
           };
           cache.prDetails.set(url, { data: r, updatedAt: now });
           result[url] = r;
@@ -842,7 +898,7 @@ app.listen(PORT, () => {
   // Pre-warm cache on startup
   refreshReleasePlansCache().catch(err => console.error("Initial cache warm-up failed:", err.message));
 
-  // Refresh cache every 5 minutes in the background
+  // Refresh cache every hour in the background
   setInterval(() => {
     console.log("Scheduled cache refresh triggered.");
     refreshReleasePlansCache().catch(err => console.error("Scheduled cache refresh failed:", err.message));
