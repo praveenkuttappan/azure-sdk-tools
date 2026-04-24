@@ -171,7 +171,14 @@ app.get("/auth/github/callback", async (req, res) => {
 });
 
 app.get("/auth/logout", (req, res) => { req.session.destroy(() => res.redirect("/login")); });
-app.get("/auth/me", (req, res) => { res.json(req.session && req.session.user ? req.session.user : null); });
+app.get("/auth/me", (req, res) => {
+  const user = req.session && req.session.user ? req.session.user : null;
+  if (user) {
+    const pmList = (process.env.RELEASE_PLAN_DASHBOARD_PM_USERS || "").split(",").map(u => u.trim().toLowerCase()).filter(Boolean);
+    user.isPM = pmList.includes((user.login || "").toLowerCase());
+  }
+  res.json(user);
+});
 
 // ══════════════════════════════════════════════════════════════
 // ── GitHub API helpers (for release plan data) ────────────────
@@ -340,7 +347,7 @@ async function _buildPrDetailsResult(prData, reviews, pr, bearerToken) {
   return result;
 }
 
-async function throttledMap(items, fn, { concurrency = 5, delayMs = 200 } = {}) {
+async function throttledMap(items, fn, { concurrency = 10, delayMs = 50 } = {}) {
   const results = [];
   for (let i = 0; i < items.length; i += concurrency) {
     const chunk = items.slice(i, i + concurrency);
@@ -356,7 +363,7 @@ async function batchFetchPrStatuses(urls) {
   if (!unique.length || !process.env.GITHUB_PAT_RELEASE_PLAN) return m;
   await throttledMap(unique, async (url) => {
     try { m.set(url, await getGitHubPrStatus(url)); } catch { m.set(url, null); }
-  }, { concurrency: 5, delayMs: 300 });
+  }, { concurrency: 10, delayMs: 50 });
   return m;
 }
 
@@ -366,7 +373,7 @@ async function batchFetchPrDetails(urls) {
   if (!unique.length || !process.env.GITHUB_PAT_RELEASE_PLAN) return m;
   await throttledMap(unique, async (url) => {
     try { m.set(url, await getGitHubPrDetails(url)); } catch { m.set(url, null); }
-  }, { concurrency: 5, delayMs: 300 });
+  }, { concurrency: 10, delayMs: 50 });
   return m;
 }
 
@@ -406,7 +413,7 @@ async function batchFetchSpecProjectPaths(urls) {
   if (!unique.length || !process.env.GITHUB_PAT_RELEASE_PLAN) return m;
   await throttledMap(unique, async (url) => {
     try { const files = await getGitHubPrFiles(url); m.set(url, deriveSpecProjectPath(files)); } catch { m.set(url, ""); }
-  }, { concurrency: 5, delayMs: 300 });
+  }, { concurrency: 10, delayMs: 50 });
   return m;
 }
 
@@ -460,6 +467,29 @@ function devopsRequest(urlPath, method, body) {
       res.on("end", () => {
         if (res.statusCode >= 200 && res.statusCode < 300) {
           try { resolve(JSON.parse(data)); } catch { resolve(data); }
+        } else { reject(new Error(`DevOps ${res.statusCode}: ${data.substring(0, 500)}`)); }
+      });
+    });
+    req.on("error", reject);
+    if (body) req.write(JSON.stringify(body));
+    req.end();
+  });
+}
+
+// Like devopsRequest but also returns response headers (for pagination).
+function devopsRequestWithHeaders(urlPath, method, body) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(urlPath);
+    const options = {
+      hostname: url.hostname, path: url.pathname + url.search, method: method || "GET",
+      headers: { Authorization: getAuthHeader(), "Content-Type": "application/json", Accept: "application/json" },
+    };
+    const req = https.request(options, (res) => {
+      let data = "";
+      res.on("data", (c) => (data += c));
+      res.on("end", () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          try { resolve({ body: JSON.parse(data), headers: res.headers }); } catch { resolve({ body: data, headers: res.headers }); }
         } else { reject(new Error(`DevOps ${res.statusCode}: ${data.substring(0, 500)}`)); }
       });
     });
@@ -536,13 +566,20 @@ function mapReleasePlan(wi, apiSpecMap) {
     if (specWi) {
       const sf = specWi.fields || {};
       let specPrUrl = (sf["Custom.ActiveSpecPullRequestUrl"] || "").trim().replace(/\/+$/, "");
-      // Fallback: extract first URL from REST API Reviews HTML field
-      if (!specPrUrl) {
-        const reviewsHtml = sf["Custom.RESTAPIReviews"] || "";
-        const hrefMatch = reviewsHtml.match(/href="([^"]+)"/);
-        if (hrefMatch) specPrUrl = hrefMatch[1].trim().replace(/\/+$/, "");
+      // Extract ALL spec PR URLs from REST API Reviews HTML field
+      const reviewsHtml = sf["Custom.RESTAPIReviews"] || "";
+      const allSpecPrUrls = [];
+      const hrefRegex = /href="([^"]+)"/g;
+      let hm;
+      while ((hm = hrefRegex.exec(reviewsHtml)) !== null) {
+        const u = hm[1].trim().replace(/\/+$/, "");
+        if (/github\.com\/.*\/pull\/\d+/.test(u) && !allSpecPrUrls.includes(u)) allSpecPrUrls.push(u);
       }
-      apiSpec = { id: cid, specPrUrl, apiVersion: sf["Custom.APISpecversion"] || "", definitionType: sf["Custom.APISpecDefinitionType"] || "" };
+      // Fallback: if no active spec PR URL, use first from reviews
+      if (!specPrUrl && allSpecPrUrls.length) specPrUrl = allSpecPrUrls[0];
+      // Previous spec PRs = all except the active one
+      const previousSpecPrUrls = allSpecPrUrls.filter(u => u !== specPrUrl);
+      apiSpec = { id: cid, specPrUrl, previousSpecPrUrls, apiVersion: sf["Custom.APISpecversion"] || "", definitionType: sf["Custom.APISpecDefinitionType"] || "" };
       break;
     }
   }
@@ -824,6 +861,79 @@ app.post("/api/refresh", async (req, res) => {
   }
 });
 
+// Fetch previous SDK PRs from work item updates history (on-demand per plan).
+app.get("/api/previous-sdk-prs/:id", async (req, res) => {
+  try {
+    const wiId = parseInt(req.params.id, 10);
+    if (!wiId) return res.status(400).json({ error: "Invalid work item ID" });
+    const sdkPrFields = LANGUAGES.map(l => `Custom.SDKPullRequestFor${l}`);
+    const previousPrs = {};
+    for (const lang of LANGUAGES) previousPrs[LANGUAGE_DISPLAY[lang]] = [];
+    let continuationToken = null;
+    do {
+      const tokenParam = continuationToken ? `&continuationToken=${encodeURIComponent(continuationToken)}` : "";
+      const url = `${DEVOPS_ORG}/${DEVOPS_PROJECT}/_apis/wit/workitems/${wiId}/updates?api-version=${API_VERSION}${tokenParam}`;
+      const { body: result, headers } = await devopsRequestWithHeaders(url, "GET");
+      const updates = result.value || [];
+      for (const upd of updates) {
+        if (!upd.fields) continue;
+        for (const lang of LANGUAGES) {
+          const fieldName = `Custom.SDKPullRequestFor${lang}`;
+          const change = upd.fields[fieldName];
+          if (!change) continue;
+          const oldVal = (change.oldValue || "").trim().replace(/\/+$/, "");
+          if (oldVal && /github\.com\/.*\/pull\/\d+/.test(oldVal)) {
+            const displayLang = LANGUAGE_DISPLAY[lang];
+            if (!previousPrs[displayLang].includes(oldVal)) previousPrs[displayLang].push(oldVal);
+          }
+        }
+      }
+      continuationToken = headers["x-ms-continuationtoken"] || null;
+    } while (continuationToken);
+    // Remove any values that match the current PR (from cached plan data)
+    if (cache.releasePlans.data) {
+      const plan = cache.releasePlans.data.plans.find(p => p.id === wiId);
+      if (plan && plan.languages) {
+        for (const [lang, l] of Object.entries(plan.languages)) {
+          if (l.sdkPrUrl && previousPrs[lang]) {
+            previousPrs[lang] = previousPrs[lang].filter(u => u !== l.sdkPrUrl);
+          }
+        }
+      }
+    }
+    res.json({ previousPrs });
+  } catch (err) {
+    console.error("Previous SDK PRs error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Batch PR status endpoint — returns just open/draft/merged/closed for multiple URLs.
+// Uses user's OAuth token, falls back to PAT.
+app.post("/api/pr-statuses", async (req, res) => {
+  try {
+    const urls = (req.body && req.body.urls) || [];
+    const userToken = req.session && req.session.githubToken;
+    const hasPat = !!process.env.GITHUB_PAT_RELEASE_PLAN;
+    if (!urls.length || (!userToken && !hasPat)) return res.json({ statuses: {} });
+    const unique = [...new Set(urls.filter(Boolean))];
+    const result = {};
+    if (userToken) {
+      await throttledMap(unique, async (url) => {
+        try { result[url] = await getGitHubPrStatusWithToken(userToken, url); }
+        catch { result[url] = null; }
+      }, { concurrency: 5, delayMs: 100 });
+    } else {
+      const statusMap = await batchFetchPrStatuses(unique);
+      for (const url of unique) result[url] = statusMap.get(url) || null;
+    }
+    res.json({ statuses: result });
+  } catch (err) {
+    console.error("PR statuses error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Lazy-load endpoint: fetch SDK PR details + statuses.
 // Uses user's OAuth token from session, falls back to GITHUB_PAT_RELEASE_PLAN.
 app.post("/api/pr-details", async (req, res) => {
@@ -851,7 +961,7 @@ app.post("/api/pr-details", async (req, res) => {
             prDetails: detailData ? { mergeable: detailData.mergeable, mergeableState: detailData.mergeableState, isApproved: detailData.isApproved, approvedBy: detailData.approvedBy, failedChecks: detailData.failedChecks, apiViewUrl: detailData.apiViewUrl || "", title: detailData.title || "", requestedReviewers: detailData.requestedReviewers || [], latestComment: detailData.latestComment || null, updatedAt: detailData.updatedAt || "" } : null,
           };
         } catch { result[url] = null; }
-      }, { concurrency: 5, delayMs: 300 });
+      }, { concurrency: 10, delayMs: 50 });
     } else {
       // PAT fallback with shared cache
       const now = Date.now();

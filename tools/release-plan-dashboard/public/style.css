@@ -475,3 +475,106 @@ main { padding: 16px 24px 40px; max-width: 1600px; margin: 0 auto; }
   .stats-bar { flex-wrap: wrap; gap: 16px; }
   .sdk-table { font-size: .75rem; }
 }
+
+/* Create Release Plan button */
+.btn-create-plan {
+  margin-left: auto;
+  padding: 6px 16px;
+  border: 1px solid var(--azure-blue);
+  background: var(--white);
+  color: var(--azure-blue);
+  font-size: .85rem;
+  font-weight: 600;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background .15s, color .15s;
+  align-self: center;
+}
+.btn-create-plan:hover { background: var(--azure-blue); color: var(--white); }
+
+/* Modal overlay */
+.modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,.45);
+  z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+}
+.modal-content {
+  background: var(--white);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.25);
+  max-width: 640px;
+  width: 90%;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+.modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid #e1dfdd;
+}
+.modal-header h2 { font-size: 1.1rem; margin: 0; }
+.modal-close {
+  background: none; border: none; font-size: 1.5rem; cursor: pointer;
+  color: var(--gray); line-height: 1;
+}
+.modal-close:hover { color: var(--red); }
+.modal-body { padding: 20px 24px; }
+.modal-body h3 { font-size: .95rem; margin: 16px 0 8px; color: var(--azure-dark); }
+.modal-body p { font-size: .88rem; line-height: 1.5; margin-bottom: 8px; }
+.guide-list { padding-left: 20px; font-size: .88rem; line-height: 1.7; }
+.guide-list li { margin-bottom: 4px; }
+.guide-code, .guide-prompt {
+  background: var(--gray-bg); border-radius: 4px; padding: 10px 14px;
+  font-size: .82rem; overflow-x: auto; margin: 8px 0;
+}
+.guide-prompt { white-space: pre-wrap; }
+
+/* Per-language action buttons in SDK table */
+.action-cell { text-align: center; white-space: nowrap; }
+.lang-action-btn {
+  padding: 3px 10px;
+  font-size: .75rem;
+  font-weight: 600;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  transition: filter .15s;
+}
+.lang-action-btn:hover { filter: brightness(.9); }
+.action-btn-generate { background: var(--azure-light); color: var(--azure-dark); }
+.action-btn-fix { background: #fff4ce; color: #8a6d3b; }
+.action-btn-release { background: var(--green-bg); color: var(--green); }
+.action-btn-merge { background: #e6f7ff; color: #0078d4; }
+
+/* PM View tab */
+.pm-view-header { margin: 0 0 12px; }
+.pm-view-header h2 { margin: 0 0 4px; font-size: 1.15rem; }
+.pm-view-desc { color: #605e5c; font-size: .85rem; margin: 0; }
+.pm-card {
+  background: #fff; border: 1px solid var(--border); border-radius: 6px;
+  padding: 10px 14px; margin-bottom: 6px;
+}
+.pm-card-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pm-plan-link { font-family: var(--font-mono); font-size: .82rem; color: var(--azure-dark); }
+.pm-service { color: #605e5c; font-size: .82rem; }
+.pm-state { font-size: .75rem; font-weight: 600; padding: 1px 8px; border-radius: 10px; }
+.pm-state.state-in-progress { background: var(--azure-light); color: var(--azure-dark); }
+.pm-state.state-new, .pm-state.state-not-started { background: #e8e8e8; color: #323130; }
+.pm-owner { color: #8a8886; font-size: .8rem; margin-left: auto; }
+.pm-card-extra { margin-top: 6px; font-size: .82rem; display: flex; gap: 8px; flex-wrap: wrap; }
+.pm-tag { padding: 2px 8px; border-radius: 4px; font-size: .78rem; }
+.pm-tag-inactive { background: #fff4ce; color: #8a6d3b; }
+.pm-tag-lang { background: #fde7e9; color: #a4262c; font-weight: 600; text-transform: capitalize; }
+.pm-tag-released { background: var(--green-bg); color: var(--green); }
+.pm-tag-unreleased { background: #fff4ce; color: #8a6d3b; }
+.plane-badge { font-size: .7rem; font-weight: 700; padding: 1px 6px; border-radius: 3px; }
+.plane-badge-mgmt { background: #e0d4f7; color: #5c2d91; }
+.plane-badge-data { background: #d0e8ff; color: #004578; }
+.empty-msg { padding: 12px 16px; color: #8a8886; font-style: italic; }
+.pm-tip-box {
+  background: #f3f2f1; border-left: 4px solid var(--azure-dark); border-radius: 4px;
+  padding: 10px 14px; margin-top: 10px; font-size: .85rem;
+}
+.pm-tip-box p { margin: 6px 0 4px; }
+.pm-tip-box .guide-prompt { margin: 6px 0 0; }

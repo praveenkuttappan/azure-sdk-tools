@@ -9,7 +9,18 @@
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => document.querySelectorAll(sel);
 
+  // ── Create Release Plan guide modal ────────────────────────
+  const createPlanBtn = document.getElementById("btn-create-plan");
+  const createPlanModal = document.getElementById("create-plan-modal");
+  const modalCloseBtn = document.getElementById("modal-close");
+  if (createPlanBtn && createPlanModal) {
+    createPlanBtn.addEventListener("click", () => { createPlanModal.style.display = ""; });
+    modalCloseBtn.addEventListener("click", () => { createPlanModal.style.display = "none"; });
+    createPlanModal.addEventListener("click", (e) => { if (e.target === createPlanModal) createPlanModal.style.display = "none"; });
+  }
+
   // ── Load user info ────────────────────────────────────────────
+  let currentUserIsPM = false;
   async function loadUserInfo() {
     try {
       const res = await fetch("/auth/me");
@@ -17,6 +28,11 @@
       const el = $("#user-info");
       if (user && el) {
         el.innerHTML = `<span class="user-name">${esc(user.name)}</span> <a href="/auth/logout" class="logout-link">Logout</a>`;
+      }
+      if (user && user.isPM) {
+        currentUserIsPM = true;
+        const pmTab = document.getElementById("tab-btn-pm");
+        if (pmTab) pmTab.style.display = "";
       }
     } catch { /* ignore */ }
   }
@@ -54,6 +70,7 @@
       }
 
       render(allPlans);
+      if (currentUserIsPM) renderPMView(allPlans);
       updateTimestamp(data.fetchedAt);
 
       // Restore expanded cards after render
@@ -68,6 +85,7 @@
               if (!summary.dataset.prLoaded) {
                 summary.dataset.prLoaded = "1";
                 lazyLoadPrDetails(details, cardEl);
+                if (cardEl.dataset.planId) lazyLoadPreviousSdkPrs(details, cardEl.dataset.planId);
               }
             }
           }
@@ -85,14 +103,14 @@
             if (!summary.dataset.prLoaded) {
               summary.dataset.prLoaded = "1";
               lazyLoadPrDetails(details, cardEl);
+              if (cardEl.dataset.planId) lazyLoadPreviousSdkPrs(details, cardEl.dataset.planId);
             }
           }
         });
       }
 
-      // Initialize PR tab data (details loaded on-demand per card)
-      allPRs = extractAllPRs(allPlans);
-      renderFilteredPRs();
+      // Initialize PR tab with progressive status loading
+      progressiveLoadPRStatuses(allPlans);
     } catch (err) {
       showError(err.message);
     } finally {
@@ -425,6 +443,7 @@
           el.dataset.prLoaded = "1";
           const card = el.closest(".plan-card");
           lazyLoadPrDetails(details, card);
+          if (card && card.dataset.planId) lazyLoadPreviousSdkPrs(details, card.dataset.planId);
         }
       });
     });
@@ -522,8 +541,6 @@
         <div class="card-meta">
           ${p.releaseMonth ? `<span>${esc(p.releaseMonth)}</span>` : ""}
           ${p.submittedBy ? `<span class="card-submitter">${esc(p.submittedBy)}</span>` : ""}
-          ${p.createdDate ? `<span class="card-date" title="Created on">Created: ${shortDate(p.createdDate)}</span>` : ""}
-          ${p.lastActivity ? `<span class="card-date" title="Last activity">Activity: ${shortDate(p.lastActivity)}</span>` : ""}
           ${stepHTML}${actionHTML}${finishedBadge}${dupHTML}
           ${apiReadinessBadge(p)}
           ${pastDue ? '<span class="badge badge-pastdue">Past Due</span>' : ""}
@@ -549,10 +566,74 @@
       const tipText = "Approved by: " + esc(d.approvedBy.join(", "));
       labels += `<span class="pr-label pr-label-approved" title="${tipText}">Approved</span>`;
     }
-    if (d.mergeable && d.mergeableState === "clean") {
+    if (isOpenOrDraft && d.mergeable && d.mergeableState === "clean") {
       labels += '<span class="pr-label pr-label-mergeable">Ready to merge</span>';
     }
     return labels;
+  }
+
+  // ── Per-language action button for SDK table ──────────────────
+  function langActionBtn(type, lang, plan, langData) {
+    const planId = plan.releasePlanId || "";
+    const specPath = plan.specProjectPath || plan.typeSpecPath || "";
+    const prUrl = langData.sdkPrUrl || "";
+    const pkg = langData.packageName || "";
+    // Encode data attributes for the popup handler
+    const attrs = `data-action-type="${esc(type)}" data-lang="${esc(lang)}" data-plan-id="${esc(planId)}" data-spec-path="${esc(specPath)}" data-pr-url="${esc(prUrl)}" data-pkg="${esc(pkg)}"`;
+    const labels = {
+      "generate": "⚡ Generate SDK",
+      "fix-checks": "🔧 Fix Checks",
+      "release": "🚀 Release",
+      "merge": "✅ Merge PR",
+    };
+    const classes = {
+      "generate": "action-btn-generate",
+      "fix-checks": "action-btn-fix",
+      "release": "action-btn-release",
+      "merge": "action-btn-merge",
+    };
+    return `<button class="lang-action-btn ${classes[type] || ""}" ${attrs}>${labels[type] || type}</button>`;
+  }
+
+  // Action popup content builder
+  function buildActionPopupContent(type, lang, planId, specPath, prUrl, pkg) {
+    let title = "";
+    let body = "";
+    const agentLink = '<a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">Azure SDK Tools agent</a>';
+    const repoNote = '<p style="font-size:.82rem;color:#605e5c;margin-top:8px;">Clone the relevant SDK repo and open Copilot CLI or VS Code from the repo root.</p>';
+
+    switch (type) {
+      case "generate":
+        title = `Generate SDK for ${lang}`;
+        body = `<p>The SDK pull request has not been generated for <strong>${esc(lang)}</strong> yet.</p>
+          <p>Use the ${agentLink} to generate the SDK:</p>
+          ${repoNote}
+          <div class="guide-prompt"><code>Generate ${esc(lang)} SDK for release plan ${esc(planId)}</code></div>
+          ${specPath ? `<p style="font-size:.82rem;color:#605e5c;">TypeSpec path: <code>${esc(specPath)}</code></p>` : ""}`;
+        break;
+      case "fix-checks":
+        title = `Fix Check Failures — ${lang}`;
+        body = `<p>The SDK pull request for <strong>${esc(lang)}</strong> has failing CI checks.</p>
+          <p>Use the ${agentLink} to diagnose and fix the failures:</p>
+          ${repoNote}
+          <div class="guide-prompt"><code>Fix CI check failures on SDK pull request ${esc(prUrl)}</code></div>
+          <p style="margin-top:8px;">Alternatively, clone the repo locally, checkout the PR branch, and run the build/tests to identify and fix the issues.</p>`;
+        break;
+      case "release":
+        title = `Release ${lang} Package`;
+        body = `<p>The SDK pull request for <strong>${esc(lang)}</strong> has been merged${pkg ? ` (<code>${esc(pkg)}</code>)` : ""}. The package is ready to be released.</p>
+          <p>Use the ${agentLink} to trigger the release:</p>
+          <div class="guide-prompt"><code>Release ${esc(lang)} SDK package for release plan ${esc(planId)}</code></div>
+          <p style="font-size:.82rem;color:#605e5c;margin-top:8px;">This will trigger the release pipeline for the package.</p>`;
+        break;
+      case "merge":
+        title = `Merge PR — ${lang}`;
+        body = `<p>The SDK pull request for <strong>${esc(lang)}</strong> is approved and all checks are passing. It is ready to be merged.</p>
+          <p><a href="${esc(prUrl)}" target="_blank" rel="noopener">Open the PR on GitHub</a> and merge it, or use the ${agentLink}:</p>
+          <div class="guide-prompt"><code>Merge SDK pull request ${esc(prUrl)}</code></div>`;
+        break;
+    }
+    return { title, body };
   }
 
   // ── Action Required guidance ─────────────────────────────────
@@ -771,6 +852,8 @@
     if (p.submittedBy) html += `<div class="detail-row"><strong>Submitted By:</strong> ${esc(p.submittedBy)}</div>`;
     if (p.releaseMonth) html += `<div class="detail-row"><strong>Release Month:</strong> ${esc(p.releaseMonth)}</div>`;
     if (p.releaseType) html += `<div class="detail-row"><strong>SDK Release Type:</strong> ${esc(p.releaseType)}</div>`;
+    if (p.createdDate) html += `<div class="detail-row"><strong>Created On:</strong> ${shortDate(p.createdDate)}</div>`;
+    if (p.lastActivity) html += `<div class="detail-row"><strong>Last Activity:</strong> ${shortDate(p.lastActivity)}</div>`;
     html += "</div>";
 
     // Expandable Product Details section
@@ -811,7 +894,7 @@
         <div class="sdk-details-content" style="${sdkDisplay}">
         <table class="sdk-table"><thead><tr>
           <th>Language</th><th>Package</th><th>SDK PR</th><th>PR Status</th>
-          <th>APIView</th><th>Release Status</th>
+          <th>APIView</th><th>Release Status</th><th>Action</th>
         </tr></thead><tbody>`;
         for (const lang of langKeys) {
           const l = langs[lang];
@@ -831,7 +914,7 @@
           }
           if (l.isNewPackage) {
             pkgLabels += '<span class="pr-label pr-label-new">New</span>';
-            if (l.namespaceApproval && l.namespaceApproval.toLowerCase() !== "approved") {
+            if (classifyPlane(p) !== "mgmt" && l.namespaceApproval && l.namespaceApproval.toLowerCase() !== "approved") {
               pkgLabels += `<span class="pr-label pr-label-ns-pending" title="Namespace: ${esc(l.namespaceApproval)}">${esc(l.namespaceApproval)}</span>`;
             }
           }
@@ -851,6 +934,29 @@
             }
           }
 
+          // Action column — determine per-language action
+          let actionCell = "";
+          if (!excluded && p.state !== "Finished") {
+            const prSt = (l.sdkPrGitHubStatus || l.prStatus || "").toLowerCase();
+            const relSt = (l.releaseStatus || "").toLowerCase();
+            const hasPr = !!l.sdkPrUrl;
+            const isMerged = prSt.includes("merged") || prSt === "completed";
+            const isOpen = prSt === "open" || prSt === "draft";
+            const hasFailedChecks = l.prDetails && l.prDetails.failedChecks && l.prDetails.failedChecks.length > 0;
+            const isApproved = l.prDetails && l.prDetails.isApproved;
+            const isMergeable = l.prDetails && l.prDetails.mergeable && l.prDetails.mergeableState === "clean";
+
+            if (!hasPr) {
+              actionCell = langActionBtn("generate", lang, p, l);
+            } else if (isOpen && hasFailedChecks) {
+              actionCell = langActionBtn("fix-checks", lang, p, l);
+            } else if (isMerged && !relSt.includes("released")) {
+              actionCell = langActionBtn("release", lang, p, l);
+            } else if (isOpen && isApproved && isMergeable) {
+              actionCell = langActionBtn("merge", lang, p, l);
+            }
+          }
+
           html += `<tr${rowClass}>
             <td><strong>${esc(lang)}</strong></td>
             <td>${esc(l.packageName) || "—"} ${pkgLabels}</td>
@@ -858,9 +964,13 @@
             <td>${statusSpan(l.sdkPrGitHubStatus || l.prStatus)}</td>
             <td class="apiview-cell">${apiViewCell}</td>
             <td>${statusSpan(releaseDisplay)}</td>
+            <td class="action-cell">${actionCell}</td>
           </tr>`;
         }
-        html += "</tbody></table></div></div>";
+        html += "</tbody></table></div>";
+        // Previous SDK PRs placeholder (loaded on-demand when card is expanded)
+        html += `<div class="previous-sdk-prs" data-plan-id="${p.id}" style="margin-top:6px;"></div>`;
+        html += "</div>";
       }
       } // end else (not private preview)
     }
@@ -870,7 +980,14 @@
       const s = p.apiSpec;
       html += `<div class="detail-group"><h4>API Spec</h4>`;
       if (s.specPrUrl)
-        html += `<div class="detail-row"><strong>Spec PR:</strong> <a href="${esc(s.specPrUrl)}" target="_blank" rel="noopener">${esc(s.specPrUrl)}</a></div>`;
+        html += `<div class="detail-row"><strong>Active Spec PR:</strong> <a href="${esc(s.specPrUrl)}" target="_blank" rel="noopener">${esc(s.specPrUrl)}</a></div>`;
+      if (s.previousSpecPrUrls && s.previousSpecPrUrls.length) {
+        html += `<div class="detail-row"><details class="previous-prs-details"><summary style="cursor:pointer;font-size:.85rem;color:#605e5c;">Previous Spec PRs (${s.previousSpecPrUrls.length})</summary><ul style="margin:4px 0;padding-left:20px;">`;
+        for (const u of s.previousSpecPrUrls) {
+          html += `<li><a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a></li>`;
+        }
+        html += `</ul></details></div>`;
+      }
       if (s.apiVersion)
         html += `<div class="detail-row"><strong>API Version:</strong> ${esc(s.apiVersion)}</div>`;
       html += "</div>";
@@ -958,7 +1075,7 @@
             const tipText = "Approved by: " + esc(d.approvedBy.join(", "));
             labels += `<span class="pr-label pr-label-approved" title="${tipText}">Approved</span>`;
           }
-          if (d.mergeable && d.mergeableState === "clean") {
+          if (lazyOpenOrDraft && d.mergeable && d.mergeableState === "clean") {
             labels += '<span class="pr-label pr-label-mergeable">Ready to merge</span>';
           }
           if (labels) {
@@ -1008,6 +1125,34 @@
       }
     } catch (err) {
       console.warn("Failed to load PR details:", err);
+    }
+  }
+
+  // ── Lazy load previous SDK PRs from work item history ──────
+  async function lazyLoadPreviousSdkPrs(detailsEl, planId) {
+    const container = detailsEl.querySelector(`.previous-sdk-prs[data-plan-id="${planId}"]`);
+    if (!container || container.dataset.loaded) return;
+    try {
+      const res = await fetch(`/api/previous-sdk-prs/${planId}`);
+      if (!res.ok) return;
+      container.dataset.loaded = "1"; // mark loaded only on success
+      const data = await res.json();
+      const prev = data.previousPrs || {};
+      const hasAny = Object.values(prev).some(arr => arr.length > 0);
+      if (!hasAny) return;
+      let html = `<details class="previous-prs-details"><summary style="cursor:pointer;font-size:.85rem;color:#605e5c;">📂 Previous SDK Pull Requests</summary><div style="padding:4px 0 4px 8px;">`;
+      for (const [lang, urls] of Object.entries(prev)) {
+        if (!urls.length) continue;
+        html += `<div style="margin-bottom:6px;"><strong>${esc(lang)}:</strong><ul style="margin:2px 0;padding-left:20px;">`;
+        for (const u of urls) {
+          html += `<li><a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a></li>`;
+        }
+        html += `</ul></div>`;
+      }
+      html += `</div></details>`;
+      container.innerHTML = html;
+    } catch (err) {
+      console.warn("Failed to load previous SDK PRs:", err);
     }
   }
 
@@ -1127,8 +1272,27 @@
   // Also use event delegation as a fallback
   document.addEventListener("click", (e) => {
     const header = e.target.closest(".section-header");
-    if (!header) return;
-    toggleSection(header);
+    if (header) { toggleSection(header); return; }
+
+    // Per-language action button handler
+    const actionBtn = e.target.closest(".lang-action-btn");
+    if (actionBtn) {
+      e.stopPropagation();
+      const type = actionBtn.dataset.actionType;
+      const lang = actionBtn.dataset.lang;
+      const planId = actionBtn.dataset.planId;
+      const specPath = actionBtn.dataset.specPath;
+      const prUrl = actionBtn.dataset.prUrl;
+      const pkg = actionBtn.dataset.pkg;
+      const { title, body } = buildActionPopupContent(type, lang, planId, specPath, prUrl, pkg);
+      // Reuse the modal
+      const modal = document.getElementById("create-plan-modal");
+      if (modal) {
+        modal.querySelector(".modal-header h2").textContent = title;
+        modal.querySelector(".modal-body").innerHTML = body;
+        modal.style.display = "";
+      }
+    }
   });
 
   // ── Search ──────────────────────────────────────────────────
@@ -1137,6 +1301,7 @@
     clearTimeout(searchTimeout);
     searchTimeout = setTimeout(async () => {
       render(allPlans);
+      if (currentUserIsPM) renderPMView(allPlans);
       renderFilteredPRs();
       // If filter looks like a plan ID and no results found locally, try server lookup
       const filter = ($("#search-box").value || "").trim();
@@ -1152,8 +1317,7 @@
                   if (!allPlans.some(p => p.id === plan.id)) allPlans.push(plan);
                 }
                 render(allPlans);
-                allPRs = extractAllPRs(allPlans);
-                renderFilteredPRs();
+                progressiveLoadPRStatuses(allPlans);
               }
             }
           } catch { /* ignore */ }
@@ -1161,6 +1325,121 @@
       }
     }, 250);
   });
+
+  // ══════════════════════════════════════════════════════════════
+  // ── PM View Tab ────────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════
+  const TIER1_DATA = [".net", "java", "javascript", "python"];
+  const TIER1_MGMT = [".net", "java", "javascript", "python", "go"];
+
+  function isMissingTier1(p) {
+    if (p.state === "Finished") return false;
+    const rt = (p.releaseType || "").toLowerCase();
+    if (rt.includes("private")) return false;
+    const langs = p.languages || {};
+    const plane = classifyPlane(p);
+    const tier1 = plane === "mgmt" ? TIER1_MGMT : TIER1_DATA;
+    const missing = [];
+    for (const t1 of tier1) {
+      const key = Object.keys(langs).find(k => k.toLowerCase() === t1);
+      if (!key) { missing.push(t1); continue; }
+      const l = langs[key];
+      if (isLangExcluded(l.exclusionStatus)) continue; // excluded is fine
+      if (!l.sdkPrUrl) missing.push(t1);
+    }
+    return missing.length > 0 ? missing : false;
+  }
+
+  function isInactive(p) {
+    if (p.state === "Finished") return false;
+    if (!p.lastActivity) return false;
+    const actDate = new Date(p.lastActivity);
+    if (isNaN(actDate.getTime())) return false;
+    const threeMonthsAgo = new Date();
+    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+    return actDate < threeMonthsAgo;
+  }
+
+  function renderPMView(plans) {
+    const inactive = [];
+    const tier1Missing = [];
+    const partial = [];
+
+    for (const p of plans) {
+      if (p.state === "Finished") continue;
+      if (isInactive(p)) inactive.push(p);
+      const missing = isMissingTier1(p);
+      if (missing) {
+        p._missingTier1 = missing;
+        tier1Missing.push(p);
+      }
+      if (isPartiallyReleased(p)) partial.push(p);
+    }
+
+    renderPMSection("list-pm-inactive", inactive, (p) => {
+      const lastAct = p.lastActivity ? shortDate(p.lastActivity) : "Unknown";
+      return `<span class="pm-tag pm-tag-inactive">Last activity: ${lastAct}</span>`;
+    });
+    renderPMSection("list-pm-tier1", tier1Missing, (p) => {
+      const missing = (p._missingTier1 || []).map(l => `<span class="pm-tag pm-tag-lang">${esc(l)}</span>`).join(" ");
+      return `Missing: ${missing}`;
+    });
+    renderPMSection("list-pm-partial", partial, (p) => {
+      const langs = p.languages || {};
+      const released = [];
+      const unreleased = [];
+      for (const [lang, l] of Object.entries(langs)) {
+        if (isLangExcluded(l.exclusionStatus)) continue;
+        const rs = (l.releaseStatus || "").toLowerCase();
+        if (rs.includes("completed") || rs.includes("released")) released.push(lang);
+        else unreleased.push(lang);
+      }
+      return `<span class="pm-tag pm-tag-released">Released: ${released.join(", ") || "none"}</span> ` +
+             `<span class="pm-tag pm-tag-unreleased">Pending: ${unreleased.join(", ") || "none"}</span>`;
+    });
+
+    // Update section counts
+    const sections = [
+      { id: "section-pm-inactive", count: inactive.length },
+      { id: "section-pm-tier1", count: tier1Missing.length },
+      { id: "section-pm-partial", count: partial.length },
+    ];
+    for (const s of sections) {
+      const sec = document.getElementById(s.id);
+      if (sec) {
+        const badge = sec.querySelector(".section-count");
+        if (badge) badge.textContent = `(${s.count})`;
+      }
+    }
+  }
+
+  function renderPMSection(listId, plans, extraFn) {
+    const el = document.getElementById(listId);
+    if (!el) return;
+    if (!plans.length) {
+      el.innerHTML = '<div class="empty-msg">None found ✓</div>';
+      return;
+    }
+    const planUrl = "https://dev.azure.com/azure-sdk/Release/_workitems/edit/";
+    el.innerHTML = plans.map(p => {
+      const plane = classifyPlane(p);
+      const planeBadge = plane === "mgmt"
+        ? '<span class="plane-badge plane-badge-mgmt">Mgmt</span>'
+        : '<span class="plane-badge plane-badge-data">Data</span>';
+      const extra = extraFn ? extraFn(p) : "";
+      return `<div class="pm-card">
+        <div class="pm-card-top">
+          ${planeBadge}
+          <a href="${planUrl}${p.releasePlanId}" target="_blank" class="pm-plan-link">#${p.releasePlanId}</a>
+          <strong>${esc(p.productName || p.title)}</strong>
+          <span class="pm-service">${esc(p.serviceName || "")}</span>
+          <span class="pm-state state-${(p.state || "").toLowerCase().replace(/\s+/g, "-")}">${esc(p.state)}</span>
+          <span class="pm-owner">${esc(p.submittedBy || "")}</span>
+        </div>
+        <div class="pm-card-extra">${extra}</div>
+      </div>`;
+    }).join("");
+  }
 
   // ══════════════════════════════════════════════════════════════
   // ── Tab switching ─────────────────────────────────────────────
@@ -1184,6 +1463,7 @@
   // ══════════════════════════════════════════════════════════════
   let allPRs = [];
   let prExpandedUrls = new Set();
+  let prLoadGeneration = 0; // increments on each load to cancel stale runs
 
   function langBadgeClass(lang) {
     const l = lang.toLowerCase().replace(/\./g, "");
@@ -1195,57 +1475,125 @@
     return "";
   }
 
-  function extractAllPRs(plans) {
-    const seen = new Set(); // dedupe by prUrl+language
+  // Extract candidate PRs without filtering by GitHub status (status fetched progressively).
+  function extractCandidatePRs(plans) {
+    const seen = new Set();
     const prs = [];
     for (const p of plans) {
       if (!p.languages) continue;
-      if (p.state === "Finished") continue; // skip finished release plans
+      if (p.state === "Finished") continue;
       const rt = (p.releaseType || "").toLowerCase();
-      if (rt.includes("private")) continue; // skip private preview
+      if (rt.includes("private")) continue;
       for (const [lang, l] of Object.entries(p.languages)) {
         if (isLangExcluded(l.exclusionStatus)) continue;
         if (!l.sdkPrUrl) continue;
-        // Skip if already released for this language
         const relSt = (l.releaseStatus || "").toLowerCase();
         if (relSt.includes("released") || relSt === "completed") continue;
-        // Skip closed/merged/completed PRs — only show open (or unknown status) PRs
-        const prSt = (l.sdkPrGitHubStatus || l.prStatus || "").toLowerCase();
-        if (prSt === "closed" || prSt.includes("merged") || prSt === "completed") continue;
+        // Skip if DevOps status already indicates closed/merged/completed
+        const devopsSt = (l.prStatus || "").toLowerCase();
+        if (devopsSt === "closed" || devopsSt.includes("merged") || devopsSt === "completed") continue;
         const dedupeKey = `${l.sdkPrUrl}|${lang}`;
         if (seen.has(dedupeKey)) continue;
         seen.add(dedupeKey);
-
-        // Parse repo/PR# from URL
         const prMatch = l.sdkPrUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
         const repo = prMatch ? prMatch[1] : "";
         const prNumber = prMatch ? prMatch[2] : "";
-
         prs.push({
-          prUrl: l.sdkPrUrl,
-          language: lang,
-          packageName: l.packageName || "",
-          releasePlanId: p.releasePlanId || "",
-          planTitle: p.title || "",
-          planId: p.id,
-          releaseMonth: p.releaseMonth || "",
-          releaseMonthDate: parseReleaseMonth(p.releaseMonth),
-          prStatus: l.sdkPrGitHubStatus || l.prStatus || "",
-          releaseStatus: l.releaseStatus || "",
-          repo,
-          prNumber,
-          prDetails: l.prDetails || null,
-          _statusLoaded: false,
+          prUrl: l.sdkPrUrl, language: lang, packageName: l.packageName || "",
+          releasePlanId: p.releasePlanId || "", planTitle: p.title || "", planId: p.id,
+          releaseMonth: p.releaseMonth || "", releaseMonthDate: parseReleaseMonth(p.releaseMonth),
+          prStatus: l.sdkPrGitHubStatus || l.prStatus || "", releaseStatus: l.releaseStatus || "",
+          repo, prNumber, prDetails: l.prDetails || null, _statusLoaded: false,
         });
       }
     }
-    // Sort by release month ascending, then plan ID
     prs.sort((a, b) => {
       const d = a.releaseMonthDate - b.releaseMonthDate;
       if (d !== 0) return d;
       return (a.releasePlanId || "").localeCompare(b.releasePlanId || "");
     });
     return prs;
+  }
+
+  // Progressively fetch GitHub PR statuses and build the PR list.
+  async function progressiveLoadPRStatuses(plans) {
+    const gen = ++prLoadGeneration;
+    const candidates = extractCandidatePRs(plans);
+    allPRs = [];
+
+    const prLoading = document.getElementById("pr-loading");
+    const prList = document.getElementById("pr-list");
+    const countEl = document.getElementById("pr-count");
+    if (prLoading) { prLoading.style.display = ""; prLoading.querySelector("p").textContent = `Fetching PR statuses (0/${candidates.length})…`; }
+    if (prList) prList.innerHTML = "";
+
+    // Collect unique PR URLs to fetch
+    const uniqueUrls = [...new Set(candidates.map(c => c.prUrl))];
+    const statusCache = new Map(); // url -> status string
+
+    // Fetch in small batches of 10, throttle re-renders to every 500ms
+    const BATCH = 10;
+    let fetched = 0;
+    let lastRender = 0;
+    let needsRender = false;
+    for (let i = 0; i < uniqueUrls.length; i += BATCH) {
+      if (gen !== prLoadGeneration) return; // cancelled
+      const batch = uniqueUrls.slice(i, i + BATCH);
+      try {
+        const res = await fetch("/api/pr-statuses", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ urls: batch }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const statuses = data.statuses || {};
+          for (const [url, st] of Object.entries(statuses)) {
+            if (st) statusCache.set(url, st);
+          }
+        }
+      } catch { /* continue */ }
+      fetched += batch.length;
+      if (gen !== prLoadGeneration) return;
+
+      // Update progress text
+      if (prLoading) prLoading.querySelector("p").textContent = `Fetching PR statuses (${Math.min(fetched, uniqueUrls.length)}/${uniqueUrls.length})…`;
+
+      // Process candidates that now have a status and add eligible ones
+      for (const c of candidates) {
+        if (c._statusLoaded) continue;
+        const st = statusCache.get(c.prUrl);
+        if (!st) continue;
+        c._statusLoaded = true;
+        c.prStatus = st;
+        const stLower = st.toLowerCase();
+        if (stLower === "open" || stLower === "draft") {
+          allPRs.push(c);
+          needsRender = true;
+        }
+      }
+      // Throttle re-renders to at most every 500ms
+      const now = Date.now();
+      if (needsRender && (now - lastRender > 500)) {
+        renderFilteredPRs();
+        lastRender = now;
+        needsRender = false;
+      }
+    }
+
+    // Final pass: add any candidates whose URL wasn't fetched (network error) if they look open
+    for (const c of candidates) {
+      if (!c._statusLoaded) {
+        const stLower = (c.prStatus || "").toLowerCase();
+        if (stLower === "open" || stLower === "draft") {
+          allPRs.push(c);
+        }
+      }
+    }
+
+    if (gen !== prLoadGeneration) return;
+    if (prLoading) prLoading.style.display = "none";
+    renderFilteredPRs();
   }
 
 
@@ -1340,7 +1688,7 @@
         html += `<div class="pr-detail-row"><strong>Requested Reviewers:</strong> ${esc(d.requestedReviewers.join(", "))}</div>`;
       }
       // Mergeable
-      if (!prIsMerged && d.mergeable && d.mergeableState === "clean") {
+      if (prIsOpenOrDraft && d.mergeable && d.mergeableState === "clean") {
         html += `<div class="pr-detail-row"><strong>✅ Ready to merge</strong></div>`;
       }
       // APIView

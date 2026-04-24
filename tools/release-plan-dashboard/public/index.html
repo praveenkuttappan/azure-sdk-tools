@@ -22,6 +22,45 @@
   <div class="tab-bar">
     <button class="tab-btn active" data-tab="tab-release-plans">Release Plans</button>
     <button class="tab-btn" data-tab="tab-sdk-prs">SDK Pull Requests</button>
+    <button class="tab-btn" data-tab="tab-pm-view" id="tab-btn-pm" style="display:none;">PM View</button>
+    <button id="btn-create-plan" class="btn-create-plan" title="How to create a release plan?">+ Create Release Plan</button>
+  </div>
+
+  <!-- Create Release Plan Guide Modal -->
+  <div id="create-plan-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>How to Create a Release Plan</h2>
+        <button id="modal-close" class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p>Release plans can be created using the <strong>Azure SDK Tools agent</strong> via <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">Copilot CLI</a> or <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">VS Code</a>.</p>
+
+        <h3>Step 1: Clone the API specs repo</h3>
+        <pre class="guide-code"><code>git clone https://github.com/Azure/azure-rest-api-specs.git</code></pre>
+        <p>Open Copilot CLI or VS Code from the repo root.</p>
+
+        <h3>Step 2: Collect the following details</h3>
+        <ol class="guide-list">
+          <li><strong>Service Tree ID</strong> for your service</li>
+          <li><strong>Service Tree ID</strong> for your product</li>
+          <li><strong>Relative path</strong> to your TypeSpec project<br>
+            <em>e.g. <code>specification/contosowidgetmanager/Contoso.Management</code></em></li>
+          <li><strong>SDK release type:</strong> beta or stable</li>
+          <li><strong>API spec pull request</strong> (optional)</li>
+        </ol>
+
+        <h3>Step 3: Use this prompt</h3>
+        <p>Copy and paste the following prompt into Copilot CLI or VS Code Copilot chat, filling in your details:</p>
+        <pre class="guide-prompt"><code>Create a release plan for TypeSpec project with following details:
+- Service Tree ID (Service): &lt;your-service-tree-id&gt;
+- Service Tree ID (Product): &lt;your-product-tree-id&gt;
+- TypeSpec project path: &lt;specification/your-service/Your.Management&gt;
+- SDK release type: &lt;beta or stable&gt;
+- API spec PR: &lt;optional PR link&gt;</code></pre>
+        <p style="font-size:.82rem;color:#605e5c;margin-top:12px;">📘 For more details, visit <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">Azure SDK Tools Agent documentation</a>.</p>
+      </div>
+    </div>
   </div>
 
   <div id="tab-release-plans" class="tab-content active">
@@ -136,6 +175,46 @@
     </div>
     <div id="pr-list" class="pr-list"></div>
   </div><!-- end tab-sdk-prs -->
+
+  <div id="tab-pm-view" class="tab-content">
+    <div class="pm-view-header">
+      <h2>PM View — Release Plan Health</h2>
+      <p class="pm-view-desc">Highlights release plans that need PM attention.</p>
+      <div class="pm-tip-box">
+        <strong>💡 How to close/abandon a release plan?</strong>
+        <p>Open <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">Copilot CLI</a> or VS Code Copilot Chat from <code>azure-rest-api-specs</code> or any Azure SDK language repo and run:</p>
+        <div class="guide-prompt"><code>Abandon release plan &lt;release plan number&gt;</code></div>
+      </div>
+    </div>
+
+    <div id="pm-loading" class="loading" style="display:none;">
+      <div class="spinner"></div>
+      <p>Analyzing release plans&hellip;</p>
+    </div>
+
+    <div id="pm-content">
+      <section id="section-pm-inactive" class="plan-section">
+        <h3 class="section-header" data-target="list-pm-inactive">
+          <span class="caret">&#9660;</span> ⚠️ Inactive Release Plans (No activity for 3+ months) <span class="section-count"></span>
+        </h3>
+        <div id="list-pm-inactive" class="plan-list"></div>
+      </section>
+
+      <section id="section-pm-tier1" class="plan-section">
+        <h3 class="section-header" data-target="list-pm-tier1">
+          <span class="caret">&#9660;</span> 🔴 Tier 1 Language Missing <span class="section-count"></span>
+        </h3>
+        <div id="list-pm-tier1" class="plan-list"></div>
+      </section>
+
+      <section id="section-pm-partial" class="plan-section">
+        <h3 class="section-header" data-target="list-pm-partial">
+          <span class="caret">&#9660;</span> 🟡 Partially Released <span class="section-count"></span>
+        </h3>
+        <div id="list-pm-partial" class="plan-list"></div>
+      </section>
+    </div>
+  </div><!-- end tab-pm-view -->
 
   <script src="app.js"></script>
 </body>
