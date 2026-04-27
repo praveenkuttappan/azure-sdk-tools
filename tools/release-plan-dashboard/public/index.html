@@ -21,9 +21,31 @@
 
   <div class="tab-bar">
     <button class="tab-btn active" data-tab="tab-release-plans">Release Plans</button>
-    <button class="tab-btn" data-tab="tab-sdk-prs">SDK Pull Requests</button>
-    <button class="tab-btn" data-tab="tab-pm-view" id="tab-btn-pm" style="display:none;">PM View</button>
+    <button class="tab-btn" data-tab="tab-sdk-prs">Review Required SDK Pull Requests</button>
+    <button class="tab-btn" data-tab="tab-pm-view" id="tab-btn-pm" style="display:none;">Attention Required from PM</button>
     <button id="btn-create-plan" class="btn-create-plan" title="How to create a release plan?">+ Create Release Plan</button>
+    <div class="tab-bar-spacer"></div>
+    <div id="pr-tab-filters" class="tab-bar-filters" style="display:none;">
+      <select id="pr-filter-lang">
+        <option value="">All Languages</option>
+        <option value=".NET">.NET</option>
+        <option value="Java">Java</option>
+        <option value="JavaScript">JavaScript</option>
+        <option value="Python">Python</option>
+        <option value="Go">Go</option>
+      </select>
+      <select id="pr-filter-status">
+        <option value="">All Statuses</option>
+        <option value="open">Open</option>
+        <option value="draft">Draft</option>
+      </select>
+      <span id="pr-count" class="pr-count-label"></span>
+    </div>
+    <select id="global-plane-filter" class="global-plane-filter">
+      <option value="">All Planes</option>
+      <option value="mgmt">Management Plane</option>
+      <option value="data">Data Plane</option>
+    </select>
   </div>
 
   <!-- Create Release Plan Guide Modal -->
@@ -42,22 +64,23 @@
 
         <h3>Step 2: Collect the following details</h3>
         <ol class="guide-list">
-          <li><strong>Service Tree ID</strong> for your service</li>
-          <li><strong>Service Tree ID</strong> for your product</li>
           <li><strong>Relative path</strong> to your TypeSpec project<br>
             <em>e.g. <code>specification/contosowidgetmanager/Contoso.Management</code></em></li>
           <li><strong>SDK release type:</strong> beta or stable</li>
           <li><strong>API spec pull request</strong> (optional)</li>
+          <li><strong>Service Tree ID</strong> for your service <em>(optional*)</em></li>
+          <li><strong>Service Tree ID</strong> for your product <em>(optional*)</em></li>
         </ol>
+        <p style="font-size:.82rem;color:#605e5c;">* Service Tree IDs are only required if this is the first time creating a release plan for your TypeSpec project path. For subsequent plans, they will be auto-populated.</p>
 
         <h3>Step 3: Use this prompt</h3>
         <p>Copy and paste the following prompt into Copilot CLI or VS Code Copilot chat, filling in your details:</p>
         <pre class="guide-prompt"><code>Create a release plan for TypeSpec project with following details:
-- Service Tree ID (Service): &lt;your-service-tree-id&gt;
-- Service Tree ID (Product): &lt;your-product-tree-id&gt;
 - TypeSpec project path: &lt;specification/your-service/Your.Management&gt;
 - SDK release type: &lt;beta or stable&gt;
-- API spec PR: &lt;optional PR link&gt;</code></pre>
+- API spec PR: &lt;optional PR link&gt;
+- Service Tree ID (Service): &lt;optional, your-service-tree-id&gt;
+- Service Tree ID (Product): &lt;optional, your-product-tree-id&gt;</code></pre>
         <p style="font-size:.82rem;color:#605e5c;margin-top:12px;">📘 For more details, visit <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">Azure SDK Tools Agent documentation</a>.</p>
       </div>
     </div>
@@ -70,7 +93,7 @@
     <div class="stat"><span id="stat-inprogress" class="stat-value">0</span><span class="stat-label">In Progress</span></div>
     <div class="stat"><span id="stat-partial" class="stat-value">0</span><span class="stat-label">Partially Released</span></div>
     <div class="stat"><span id="stat-new" class="stat-value">0</span><span class="stat-label">New / Not Started</span></div>
-    <div class="stat"><span id="stat-finished" class="stat-value">0</span><span class="stat-label">Recently Finished</span></div>
+    <div class="stat"><span id="stat-finished" class="stat-value">0</span><span class="stat-label">Finished in last 2 months</span></div>
   </div>
 
   <div id="loading" class="loading">
@@ -83,7 +106,7 @@
   <main id="content" hidden>
     <div class="plane-columns">
       <!-- Management Plane -->
-      <div class="plane-column">
+      <div class="plane-column" id="plane-col-mgmt">
         <h2 class="plane-heading plane-heading-mgmt">Management Plane <span id="stat-mgmt" class="plane-total"></span></h2>
 
         <section id="section-mgmt-inprogress" class="plan-section">
@@ -109,14 +132,14 @@
 
         <section id="section-mgmt-finished" class="plan-section collapsed">
           <h3 class="section-header" data-target="list-mgmt-finished">
-            <span class="caret">&#9654;</span> Recently Finished <span class="section-count"></span>
+            <span class="caret">&#9654;</span> Finished in last 2 months <span class="section-count"></span>
           </h3>
           <div id="list-mgmt-finished" class="plan-list" hidden></div>
         </section>
       </div>
 
       <!-- Data Plane -->
-      <div class="plane-column">
+      <div class="plane-column" id="plane-col-data">
         <h2 class="plane-heading plane-heading-data">Data Plane <span id="stat-data" class="plane-total"></span></h2>
 
         <section id="section-data-inprogress" class="plan-section">
@@ -142,7 +165,7 @@
 
         <section id="section-data-finished" class="plan-section collapsed">
           <h3 class="section-header" data-target="list-data-finished">
-            <span class="caret">&#9654;</span> Recently Finished <span class="section-count"></span>
+            <span class="caret">&#9654;</span> Finished in last 2 months <span class="section-count"></span>
           </h3>
           <div id="list-data-finished" class="plan-list" hidden></div>
         </section>
@@ -153,22 +176,6 @@
   </div><!-- end tab-release-plans -->
 
   <div id="tab-sdk-prs" class="tab-content">
-    <div class="pr-filter-bar">
-      <select id="pr-filter-lang">
-        <option value="">All Languages</option>
-        <option value=".NET">.NET</option>
-        <option value="Java">Java</option>
-        <option value="JavaScript">JavaScript</option>
-        <option value="Python">Python</option>
-        <option value="Go">Go</option>
-      </select>
-      <select id="pr-filter-status">
-        <option value="">All Statuses</option>
-        <option value="open">Open</option>
-        <option value="draft">Draft</option>
-      </select>
-      <span id="pr-count" class="pr-count-label"></span>
-    </div>
     <div id="pr-loading" class="loading" style="display:none;">
       <div class="spinner"></div>
       <p>Extracting pull requests&hellip;</p>

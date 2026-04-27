@@ -60,6 +60,14 @@
         throw new Error(`Failed to load release plans (${res.status}).`);
       }
       const data = await res.json();
+
+      // Server is still warming up — show loading message and retry
+      if (data.loading) {
+        showLoading(true, "Release plans are being fetched. Dashboard will be available shortly\u2026");
+        setTimeout(fetchPlans, 5000);
+        return;
+      }
+      showLoading(false);
       allPlans = data.plans || [];
 
       // Apply URL filter param if present
@@ -130,13 +138,26 @@
   // A language is excluded only when ReleaseExclusionStatus is Approved or Requested
   function isLangExcluded(exclusionStatus) {
     const val = (exclusionStatus || "").toLowerCase().trim();
-    return val === "approved" || val === "requested";
+    return val === "approved";
+  }
+
+  function exclusionLabel(exclusionStatus) {
+    const val = (exclusionStatus || "").toLowerCase().trim();
+    if (val === "approved") return { text: "Exclusion Approved", cls: "row-excluded" };
+    if (val === "requested") return { text: "Exclusion Requested", cls: "row-exclusion-requested" };
+    return null;
+  }
+
+  // Check if a plan is private preview based on releasePlanType field
+  // Values: "APEX Private Preview", "APEX Public Preview", "GA"
+  function isPrivatePreviewPlan(p) {
+    const rpt = (p.releasePlanType || "").toLowerCase();
+    return rpt.includes("private");
   }
 
   // ── Compute current step and action for a release plan ───────
   function computeCurrentStep(p) {
-    const rt = (p.releaseType || "").toLowerCase();
-    const isPrivatePreview = rt.includes("private");
+    const isPrivatePreview = isPrivatePreviewPlan(p);
     if (p.state === "Finished") {
       if (isPrivatePreview) return { status: "Completed", action: "", statusClass: "step-released" };
       return { status: "Released", action: "", statusClass: "step-released" };
@@ -148,6 +169,9 @@
     // Step 1: API Spec checks
     if (!specPrUrl) return { status: "API Spec Not Available", action: "Service Team", statusClass: "step-blocked" };
     if (apiReady !== "completed") return { status: "API Spec In Progress", action: "Spec PR Reviewer", statusClass: "step-inprogress" };
+
+    // Private preview: no SDK stages — spec merged means done
+    if (isPrivatePreview) return { status: "Completed", action: "", statusClass: "step-released" };
 
     // API spec is merged — check SDK status across non-excluded languages
     const langs = p.languages || {};
@@ -279,11 +303,16 @@
     }
   }
 
+  function getGlobalPlaneFilter() {
+    return (document.getElementById("global-plane-filter") || {}).value || "";
+  }
+
   // ── Render ──────────────────────────────────────────────────
   function render(plans) {
     detectDuplicates(plans);
+    const planeFilter = getGlobalPlaneFilter();
     const filter = ($("#search-box").value || "").toLowerCase();
-    const filtered = filter
+    let filtered = filter
       ? plans.filter(
           (p) =>
             p.title.toLowerCase().includes(filter) ||
@@ -294,6 +323,7 @@
             String(p.releasePlanId || "").toLowerCase().includes(filter)
         )
       : plans;
+    if (planeFilter) filtered = filtered.filter(p => classifyPlane(p) === planeFilter);
 
     const mgmt = filtered.filter((p) => classifyPlane(p) === "mgmt");
     const data = filtered.filter((p) => classifyPlane(p) === "data");
@@ -388,6 +418,12 @@
       if (sec) sec.style.display = (isFiltering && count === 0) ? "none" : "";
     }
 
+    // Hide plane columns based on global plane filter
+    const mgmtCol = document.getElementById("plane-col-mgmt");
+    const dataCol = document.getElementById("plane-col-data");
+    if (mgmtCol) mgmtCol.style.display = (planeFilter === "data") ? "none" : "";
+    if (dataCol) dataCol.style.display = (planeFilter === "mgmt") ? "none" : "";
+
     // Hide plane headings when single releasePlan param or when plane has no items
     const mgmtHeading = $(".plane-heading-mgmt");
     const dataHeading = $(".plane-heading-data");
@@ -425,6 +461,10 @@
       return;
     }
     container.innerHTML = plans.map(cardHTML).join("");
+    attachCardHandlers(container, plans);
+  }
+
+  function attachCardHandlers(container, plans) {
     // Store plan data references on cards for step recomputation
     container.querySelectorAll(".plan-card").forEach((cardEl) => {
       const planId = parseInt(cardEl.dataset.planId, 10);
@@ -434,7 +474,7 @@
     // Attach collapse/expand handlers for cards (with lazy PR detail loading)
     container.querySelectorAll(".card-summary").forEach((el) => {
       el.addEventListener("click", (e) => {
-        if (e.target.closest("a")) return;
+        if (e.target.closest("a") || e.target.closest(".plan-refresh-btn")) return;
         const details = el.nextElementSibling;
         const opening = !details.classList.contains("open");
         details.classList.toggle("open");
@@ -476,6 +516,51 @@
         } else {
           content.style.display = "none";
           if (caret) caret.innerHTML = "&#9654;";
+        }
+      });
+    });
+    // Attach refresh button handlers
+    container.querySelectorAll(".plan-refresh-btn").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const planId = btn.dataset.planId;
+        if (!planId || btn.disabled) return;
+        btn.disabled = true;
+        btn.classList.add("spinning");
+        try {
+          const resp = await fetch(`/api/refresh-plan/${planId}`, { method: "POST" });
+          const data = await resp.json();
+          if (data.plan) {
+            // Update local plans array
+            const idx = allPlans.findIndex(p => p.id === data.plan.id);
+            if (idx >= 0) allPlans[idx] = data.plan;
+            // Re-render the card in-place
+            const card = btn.closest(".plan-card");
+            if (card) {
+              const wasOpen = card.querySelector(".card-details.open");
+              const tmp = document.createElement("div");
+              tmp.innerHTML = cardHTML(data.plan);
+              const newCard = tmp.firstElementChild;
+              card.replaceWith(newCard);
+              attachCardHandlers(newCard, allPlans);
+              if (wasOpen) {
+                const summary = newCard.querySelector(".card-summary");
+                const details = newCard.querySelector(".card-details");
+                if (summary && details) {
+                  details.classList.add("open");
+                  summary.classList.add("expanded");
+                  summary.dataset.prLoaded = "1";
+                  lazyLoadPrDetails(details, newCard);
+                  lazyLoadPreviousSdkPrs(details, planId);
+                }
+              }
+            }
+          }
+        } catch (err) {
+          console.error("Refresh plan error:", err);
+        } finally {
+          btn.disabled = false;
+          btn.classList.remove("spinning");
         }
       });
     });
@@ -525,7 +610,7 @@
     const stepHTML = (step.status && !isTerminal)
       ? `<span class="step-badge ${step.statusClass}">${esc(step.status)}</span>`
       : "";
-    const actionHTML = (step.action && !isTerminal)
+    const actionHTML = (step.action && !isTerminal && !p._pmAction)
       ? `<span class="action-badge">Action required from: ${esc(step.action)}</span>`
       : "";
     const dupHTML = p._duplicateOf
@@ -545,6 +630,7 @@
           ${apiReadinessBadge(p)}
           ${pastDue ? '<span class="badge badge-pastdue">Past Due</span>' : ""}
         </div>
+        <button class="plan-refresh-btn" data-plan-id="${p.id}" title="Refresh this release plan">&#x21bb;</button>
       </div>
       <div class="card-details">${detailHTML(p)}</div>
     </div>`;
@@ -559,8 +645,9 @@
     const isOpenOrDraft = !isMerged && !isClosed;
     let labels = "";
     if (isOpenOrDraft && d.failedChecks && d.failedChecks.length) {
-      const tipText = esc(d.failedChecks.join(", "));
-      labels += `<span class="pr-label pr-label-failed" title="${tipText}">${d.failedChecks.length} check(s) failed</span>`;
+      const checksUrl = l.sdkPrUrl ? l.sdkPrUrl.replace(/\/$/, "") + "/checks" : "";
+      const checksLink = checksUrl ? ` <a href="${esc(checksUrl)}" target="_blank" rel="noopener" style="font-size:.75rem;">View checks</a>` : "";
+      labels += `<span class="pr-label pr-label-failed">${d.failedChecks.length} check(s) failed${checksLink}</span>`;
     }
     if (!isMerged && d.isApproved && d.approvedBy && d.approvedBy.length) {
       const tipText = "Approved by: " + esc(d.approvedBy.join(", "));
@@ -600,7 +687,17 @@
     let title = "";
     let body = "";
     const agentLink = '<a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">Azure SDK Tools agent</a>';
-    const repoNote = '<p style="font-size:.82rem;color:#605e5c;margin-top:8px;">Clone the relevant SDK repo and open Copilot CLI or VS Code from the repo root.</p>';
+    const repoUrls = {
+      javascript: "https://github.com/Azure/azure-sdk-for-js.git",
+      java: "https://github.com/Azure/azure-sdk-for-java.git",
+      python: "https://github.com/Azure/azure-sdk-for-python.git",
+      ".net": "https://github.com/Azure/azure-sdk-for-net.git",
+      go: "https://github.com/Azure/azure-sdk-for-go.git"
+    };
+    const repoUrl = repoUrls[(lang || "").toLowerCase()] || "";
+    const repoNote = repoUrl
+      ? `<p style="font-size:.82rem;color:#605e5c;margin-top:8px;">Clone <a href="${esc(repoUrl)}" target="_blank" rel="noopener"><code>${esc(repoUrl)}</code></a> and open Copilot CLI or VS Code from the repo root.</p>`
+      : '<p style="font-size:.82rem;color:#605e5c;margin-top:8px;">Clone the relevant SDK repo and open Copilot CLI or VS Code from the repo root.</p>';
 
     switch (type) {
       case "generate":
@@ -608,29 +705,29 @@
         body = `<p>The SDK pull request has not been generated for <strong>${esc(lang)}</strong> yet.</p>
           <p>Use the ${agentLink} to generate the SDK:</p>
           ${repoNote}
-          <div class="guide-prompt"><code>Generate ${esc(lang)} SDK for release plan ${esc(planId)}</code></div>
+          <div class="guide-prompt"><code>Generate ${esc(lang)} SDK${pkg ? ` for package ${esc(pkg)}` : ""}${specPath ? ` for TypeSpec project ${esc(specPath)}` : ""} for release plan ${esc(planId)}</code></div>
           ${specPath ? `<p style="font-size:.82rem;color:#605e5c;">TypeSpec path: <code>${esc(specPath)}</code></p>` : ""}`;
         break;
       case "fix-checks":
-        title = `Fix Check Failures — ${lang}`;
-        body = `<p>The SDK pull request for <strong>${esc(lang)}</strong> has failing CI checks.</p>
+        title = `Fix Check Failures — ${lang}${pkg ? ` (${pkg})` : ""}`;
+        body = `<p>The SDK pull request for <strong>${esc(lang)}</strong>${pkg ? ` package <code>${esc(pkg)}</code>` : ""} has failing CI checks.</p>
           <p>Use the ${agentLink} to diagnose and fix the failures:</p>
           ${repoNote}
-          <div class="guide-prompt"><code>Fix CI check failures on SDK pull request ${esc(prUrl)}</code></div>
+          <div class="guide-prompt"><code>Fix CI check failures on ${esc(lang)} SDK pull request ${esc(prUrl)}${pkg ? ` for package ${esc(pkg)}` : ""}</code></div>
           <p style="margin-top:8px;">Alternatively, clone the repo locally, checkout the PR branch, and run the build/tests to identify and fix the issues.</p>`;
         break;
       case "release":
-        title = `Release ${lang} Package`;
-        body = `<p>The SDK pull request for <strong>${esc(lang)}</strong> has been merged${pkg ? ` (<code>${esc(pkg)}</code>)` : ""}. The package is ready to be released.</p>
+        title = `Release ${lang} Package${pkg ? ` — ${pkg}` : ""}`;
+        body = `<p>The SDK pull request for <strong>${esc(lang)}</strong>${pkg ? ` package <code>${esc(pkg)}</code>` : ""} has been merged. The package is ready to be released.</p>
           <p>Use the ${agentLink} to trigger the release:</p>
-          <div class="guide-prompt"><code>Release ${esc(lang)} SDK package for release plan ${esc(planId)}</code></div>
+          <div class="guide-prompt"><code>Release ${esc(lang)} SDK package${pkg ? ` ${esc(pkg)}` : ""} for release plan ${esc(planId)}</code></div>
           <p style="font-size:.82rem;color:#605e5c;margin-top:8px;">This will trigger the release pipeline for the package.</p>`;
         break;
       case "merge":
-        title = `Merge PR — ${lang}`;
-        body = `<p>The SDK pull request for <strong>${esc(lang)}</strong> is approved and all checks are passing. It is ready to be merged.</p>
+        title = `Merge PR — ${lang}${pkg ? ` (${pkg})` : ""}`;
+        body = `<p>The SDK pull request for <strong>${esc(lang)}</strong>${pkg ? ` package <code>${esc(pkg)}</code>` : ""} is approved and all checks are passing. It is ready to be merged.</p>
           <p><a href="${esc(prUrl)}" target="_blank" rel="noopener">Open the PR on GitHub</a> and merge it, or use the ${agentLink}:</p>
-          <div class="guide-prompt"><code>Merge SDK pull request ${esc(prUrl)}</code></div>`;
+          <div class="guide-prompt"><code>Merge ${esc(lang)} SDK pull request ${esc(prUrl)}</code></div>`;
         break;
     }
     return { title, body };
@@ -828,32 +925,172 @@
     </div>`;
   }
 
+  // ── Release Plan Stage Progress Bar ──────────────────────────
+  function computeStages(p) {
+    const plane = classifyPlane(p);
+    const isPrivatePreview = isPrivatePreviewPlan(p);
+    const specPrUrl = (p.apiSpec && p.apiSpec.specPrUrl) || "";
+    const apiReady = (p.apiReadiness || "").toLowerCase() === "completed";
+    const langs = p.languages || {};
+    const langKeys = Object.keys(langs);
+    const activeLangs = langKeys.filter(k => !isLangExcluded(langs[k].exclusionStatus));
+    // A language counts as "SDK generated" if it has a PR URL, or release is completed, or PR status is merged
+    function isLangGenerated(k) {
+      const l = langs[k];
+      if (l.sdkPrUrl) return true;
+      const rs = (l.releaseStatus || "").toLowerCase();
+      if (rs.includes("completed") || rs.includes("released")) return true;
+      const ps = (l.sdkPrGitHubStatus || l.prStatus || "").toLowerCase();
+      if (ps.includes("merged") || ps.includes("completed")) return true;
+      return false;
+    }
+    const langsWithPr = activeLangs.filter(k => langs[k].sdkPrUrl);
+    const langsGenerated = activeLangs.filter(isLangGenerated);
+
+    const prStatuses = langsWithPr.map(k => {
+      const l = langs[k];
+      return (l.sdkPrGitHubStatus || l.prStatus || "").toLowerCase();
+    });
+    const allGenerated = activeLangs.length > 0 && langsGenerated.length === activeLangs.length;
+    const anyCheckFailure = langsWithPr.some(k => {
+      const d = langs[k].prDetails;
+      return d && d.failedChecks && d.failedChecks.length > 0;
+    });
+    const allPrMerged = langsGenerated.length > 0 && activeLangs.every(k => {
+      const l = langs[k];
+      const ps = (l.sdkPrGitHubStatus || l.prStatus || "").toLowerCase();
+      const rs = (l.releaseStatus || "").toLowerCase();
+      return ps.includes("merged") || ps.includes("completed") || rs.includes("completed") || rs.includes("released");
+    });
+    const releaseStatuses = activeLangs.map(k => (langs[k].releaseStatus || "").toLowerCase());
+    const allReleased = activeLangs.length > 0 && releaseStatuses.every(s => s.includes("completed") || s.includes("released"));
+
+    // Stages for both management and data plane
+    // "done" | "current" | "upcoming" | "error"
+    const stages = [];
+
+    // Stage 1: Define TypeSpec & Create Spec PR
+    const s1Done = !!specPrUrl;
+    stages.push({ label: "Create Spec PR", status: s1Done ? "done" : "current", icon: "📝" });
+
+    // Stage 2: API Spec Review
+    const s2Done = s1Done && apiReady;
+    const s2Current = s1Done && !apiReady;
+    stages.push({ label: "API Spec Review", status: s2Done ? "done" : s2Current ? "current" : "upcoming", icon: "🔍" });
+
+    // For private preview: Create Spec PR → API Spec Review → Merge Spec
+    if (isPrivatePreview) {
+      const specApproval = (p.specApprovalStatus || "").toLowerCase();
+      const specApproved = s2Done || specApproval.includes("approved");
+      // Stage 2 override: use spec approval status for private preview
+      stages[1] = {
+        label: "API Spec Review",
+        status: (s1Done && specApproved) ? "done" : s1Done ? "current" : "upcoming",
+        icon: "🔍"
+      };
+      // Stage 3: Merge Spec — completed when spec PR is merged
+      const specMerged = apiReady; // apiReadiness "completed" means PR merged
+      const s3ppDone = specApproved && specMerged;
+      const s3ppCurrent = specApproved && !specMerged;
+      stages.push({
+        label: "Merge Spec",
+        status: s3ppDone ? "done" : s3ppCurrent ? "current" : "upcoming",
+        icon: "🔀"
+      });
+      return stages;
+    }
+
+    // Stage 3: Generate SDK
+    const noFailures = !anyCheckFailure;
+    const s3Done = s2Done && allGenerated && noFailures;
+    const s3Error = s2Done && langsGenerated.length > 0 && anyCheckFailure;
+    const s3Current = s2Done && !s3Done && !s3Error;
+    stages.push({
+      label: "Generate SDK",
+      status: s3Done ? "done" : s3Error ? "error" : s3Current ? "current" : "upcoming",
+      icon: "⚙️"
+    });
+
+    // Stage 4: SDK Review & Merge
+    const s4Done = s3Done && allPrMerged;
+    const s4Current = s3Done && !allPrMerged;
+    stages.push({
+      label: "SDK Review & Merge",
+      status: s4Done ? "done" : s4Current ? "current" : "upcoming",
+      icon: "✅"
+    });
+
+    // Stage 5: Release SDK — active if at least one SDK is merged but not all released
+    const anyMerged = langsWithPr.some(k => {
+      const s = (langs[k].sdkPrGitHubStatus || langs[k].prStatus || "").toLowerCase();
+      return s.includes("merged") || s.includes("completed");
+    });
+    const s5Done = allReleased && activeLangs.length > 0;
+    const s5Current = !s5Done && anyMerged && !allReleased;
+    stages.push({
+      label: "Release SDK",
+      status: s5Done ? "done" : s5Current ? "current" : "upcoming",
+      icon: "🚀"
+    });
+
+    return stages;
+  }
+
+  function stageBarHTML(p) {
+    const stages = computeStages(p);
+    if (!stages.length) return "";
+    if (p.state === "Finished") {
+      // Mark all stages as done for finished plans
+      stages.forEach(s => { s.status = "done"; });
+    }
+    const items = stages.map((s, i) => {
+      const cls = `stage-item stage-${s.status}`;
+      const connector = i < stages.length - 1 ? '<div class="stage-connector"></div>' : "";
+      return `<div class="${cls}">
+        <div class="stage-circle">${s.icon}</div>
+        <div class="stage-label">${s.label}</div>
+      </div>${connector}`;
+    }).join("");
+    return `<div class="stage-bar">${items}</div>`;
+  }
+
   function detailHTML(p) {
     const specPath = p.specProjectPath || p.typeSpecPath || "";
     const step = computeCurrentStep(p);
-    let html = '<div class="detail-meta">';
+    let html = stageBarHTML(p);
+
+    html += '<div class="detail-meta">';
     // Current step highlight (hide for completed/released)
     const detailTerminal = step.status === "Released" || step.status === "Completed";
     if (step.status && !detailTerminal) {
       html += `<div class="detail-row detail-step-highlight">
         <strong>Current stage:</strong> <span class="step-badge ${step.statusClass}">${esc(step.status)}</span>`;
-      if (step.action) html += ` <strong>Action required from:</strong> <span class="action-badge">${esc(step.action)}</span>`;
+      if (step.action) {
+        if (!p._pmAction) {
+          html += ` <strong>Action required from:</strong> <span class="action-badge">${esc(step.action)}</span>`;
+        }
+      }
       html += `</div>`;
     }
     if (specPath) html += `<div class="detail-row"><strong>Spec Project Path:</strong> ${esc(specPath)}</div>`;
-    // Work item link
-    if (p.releasePlanId) {
+    // Work item link — always show using work item id
+    {
       const wiUrl = `https://dev.azure.com/azure-sdk/Release/_workitems/edit/${p.id}`;
-      html += `<div class="detail-row"><strong>Release Plan:</strong> <a href="${esc(wiUrl)}" target="_blank" rel="noopener">#${esc(String(p.releasePlanId))}</a> <span class="wi-warning">⚠️ Do not modify directly — use the <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">azsdk agent</a></span></div>`;
+      const label = p.releasePlanId ? `#${esc(String(p.releasePlanId))}` : `WI ${esc(String(p.id))}`;
+      html += `<div class="detail-row"><strong>Release Plan:</strong> <a href="${esc(wiUrl)}" target="_blank" rel="noopener">${label}</a> <span class="wi-warning">⚠️ Do not modify directly — use the <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">azsdk agent</a></span></div>`;
     }
     if (p.typeSpecPath && p.specProjectPath && p.typeSpecPath !== p.specProjectPath) {
       html += `<div class="detail-row" style="font-size:.8rem;color:#605e5c;"><em>DevOps TypeSpec Path: ${esc(p.typeSpecPath)}</em></div>`;
     }
-    if (p.submittedBy) html += `<div class="detail-row"><strong>Submitted By:</strong> ${esc(p.submittedBy)}</div>`;
-    if (p.releaseMonth) html += `<div class="detail-row"><strong>Release Month:</strong> ${esc(p.releaseMonth)}</div>`;
-    if (p.releaseType) html += `<div class="detail-row"><strong>SDK Release Type:</strong> ${esc(p.releaseType)}</div>`;
-    if (p.createdDate) html += `<div class="detail-row"><strong>Created On:</strong> ${shortDate(p.createdDate)}</div>`;
-    if (p.lastActivity) html += `<div class="detail-row"><strong>Last Activity:</strong> ${shortDate(p.lastActivity)}</div>`;
+    // Horizontal metadata row
+    const metaItems = [];
+    if (p.submittedBy) metaItems.push(`<span><strong>Submitted By:</strong> ${esc(p.submittedBy)}</span>`);
+    if (p.releaseMonth) metaItems.push(`<span><strong>Release Month:</strong> ${esc(p.releaseMonth)}</span>`);
+    if (p.releaseType) metaItems.push(`<span><strong>SDK Release Type:</strong> ${esc(p.releaseType)}</span>`);
+    if (p.createdDate) metaItems.push(`<span><strong>Created On:</strong> ${shortDate(p.createdDate)}</span>`);
+    if (p.lastActivity) metaItems.push(`<span><strong>Last Activity:</strong> ${shortDate(p.lastActivity)}</span>`);
+    if (metaItems.length) html += `<div class="detail-meta-row">${metaItems.join("")}</div>`;
+    if (p._pmAction) html += `<div class="pm-action"><strong>Possible PM action:</strong> ${p._pmAction}</div>`;
     html += "</div>";
 
     // Expandable Product Details section
@@ -875,8 +1112,7 @@
 
     // SDK Languages table (hide for private preview)
     {
-      const rpType = (p.releaseType || "").toLowerCase();
-      const isPrivPrev = rpType.includes("private");
+      const isPrivPrev = isPrivatePreviewPlan(p);
       if (isPrivPrev) {
         html += `<div class="detail-group private-preview-notice"><p>SDKs are not generated or released for private preview release plans.</p></div>`;
       } else {
@@ -894,17 +1130,19 @@
         <div class="sdk-details-content" style="${sdkDisplay}">
         <table class="sdk-table"><thead><tr>
           <th>Language</th><th>Package</th><th>SDK PR</th><th>PR Status</th>
-          <th>APIView</th><th>Release Status</th><th>Action</th>
+          <th>APIView</th><th>Release Status</th><th>Action Required</th>
         </tr></thead><tbody>`;
         for (const lang of langKeys) {
           const l = langs[lang];
           const excluded = isLangExcluded(l.exclusionStatus);
-          const rowClass = excluded ? ' class="row-excluded"' : "";
+          const exLabel = exclusionLabel(l.exclusionStatus);
+          const rowClass = exLabel ? ` class="${exLabel.cls}"` : "";
           const prLink = l.sdkPrUrl
             ? `<a href="${esc(l.sdkPrUrl)}" target="_blank" rel="noopener">PR</a>`
             : "—";
           const prLabels = l.sdkPrUrl ? prDetailLabels(l) : "";
-          const releaseDisplay = excluded ? "Excluded" : (l.releaseStatus || "");
+          let releaseDisplay = l.releaseStatus || "";
+          if (exLabel) releaseDisplay = exLabel.text;
 
           // Package labels: version (hide if released) + namespace approval + new package + API review
           let pkgLabels = "";
@@ -961,7 +1199,7 @@
             <td><strong>${esc(lang)}</strong></td>
             <td>${esc(l.packageName) || "—"} ${pkgLabels}</td>
             <td>${prLink} ${prLabels}</td>
-            <td>${statusSpan(l.sdkPrGitHubStatus || l.prStatus)}</td>
+            <td>${l.sdkPrUrl ? statusSpan(l.sdkPrGitHubStatus || l.prStatus) : ""}</td>
             <td class="apiview-cell">${apiViewCell}</td>
             <td>${statusSpan(releaseDisplay)}</td>
             <td class="action-cell">${actionCell}</td>
@@ -975,40 +1213,40 @@
       } // end else (not private preview)
     }
 
-    // API Spec
-    if (p.apiSpec) {
-      const s = p.apiSpec;
-      html += `<div class="detail-group"><h4>API Spec</h4>`;
-      if (s.specPrUrl)
-        html += `<div class="detail-row"><strong>Active Spec PR:</strong> <a href="${esc(s.specPrUrl)}" target="_blank" rel="noopener">${esc(s.specPrUrl)}</a></div>`;
-      if (s.previousSpecPrUrls && s.previousSpecPrUrls.length) {
-        html += `<div class="detail-row"><details class="previous-prs-details"><summary style="cursor:pointer;font-size:.85rem;color:#605e5c;">Previous Spec PRs (${s.previousSpecPrUrls.length})</summary><ul style="margin:4px 0;padding-left:20px;">`;
-        for (const u of s.previousSpecPrUrls) {
+    // API Spec + Spec Approval — horizontal row
+    {
+      const specItems = [];
+      if (p.apiSpec) {
+        const s = p.apiSpec;
+        if (s.specPrUrl) specItems.push(`<span><strong>Spec PR:</strong> <a href="${esc(s.specPrUrl)}" target="_blank" rel="noopener">PR</a></span>`);
+        if (s.apiVersion) specItems.push(`<span><strong>API Version:</strong> ${esc(s.apiVersion)}</span>`);
+      }
+      if (p.apiReadiness && p.apiReadiness !== "unknown") {
+        const approvalLabel = p.apiReadiness === "completed" ? "Approved (PR Merged)" : "Pending (PR Open)";
+        const approvalCls = p.apiReadiness === "completed" ? "status-completed" : "status-inprogress";
+        specItems.push(`<span><strong>Spec Approval:</strong> <span class="${approvalCls}">${approvalLabel}</span></span>`);
+      } else if (p.specApprovalStatus) {
+        specItems.push(`<span><strong>Spec Approval:</strong> ${statusSpan(p.specApprovalStatus)}</span>`);
+      }
+      if (specItems.length) {
+        html += `<div class="detail-meta-row">${specItems.join("")}</div>`;
+      }
+      // Previous spec PRs (collapsible, separate line)
+      if (p.apiSpec && p.apiSpec.previousSpecPrUrls && p.apiSpec.previousSpecPrUrls.length) {
+        html += `<div class="detail-row"><details class="previous-prs-details"><summary style="cursor:pointer;font-size:.85rem;color:#605e5c;">Previous Spec PRs (${p.apiSpec.previousSpecPrUrls.length})</summary><ul style="margin:4px 0;padding-left:20px;">`;
+        for (const u of p.apiSpec.previousSpecPrUrls) {
           html += `<li><a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a></li>`;
         }
         html += `</ul></details></div>`;
       }
-      if (s.apiVersion)
-        html += `<div class="detail-row"><strong>API Version:</strong> ${esc(s.apiVersion)}</div>`;
-      html += "</div>";
     }
 
-    // Spec Approval — derived from GitHub PR status
-    if (p.apiReadiness && p.apiReadiness !== "unknown") {
-      const approvalLabel = p.apiReadiness === "completed" ? "Approved (PR Merged)" : "Pending (PR Open)";
-      const approvalCls = p.apiReadiness === "completed" ? "status-completed" : "status-inprogress";
-      html += `<div class="detail-row"><strong>Spec Approval:</strong> <span class="${approvalCls}">${approvalLabel}</span></div>`;
-    } else if (p.specApprovalStatus) {
-      html += `<div class="detail-row"><strong>Spec Approval:</strong> ${statusSpan(p.specApprovalStatus)}</div>`;
-    }
-    if (p.sdkLanguages) {
-      html += `<div class="detail-row"><strong>SDK Languages:</strong> ${esc(p.sdkLanguages)}</div>`;
+    // Action Required guidance (hidden in PM view, replaced by PM action)
+    if (!p._pmAction) {
+      html += actionRequiredHTML(p);
     }
 
-    // Action Required guidance
-    html += actionRequiredHTML(p);
-
-    // Link a different SDK PR (standalone section, outside action required)
+    // Link a different SDK PR(standalone section, outside action required)
     if (p.releasePlanId && p.state !== "Finished") {
       const planId = p.releasePlanId || "";
       html += `<div class="action-note">
@@ -1068,8 +1306,9 @@
           const lazyClosed = (info.gitHubStatus || "").toLowerCase() === "closed";
           const lazyOpenOrDraft = !lazyMerged && !lazyClosed;
           if (lazyOpenOrDraft && d.failedChecks && d.failedChecks.length) {
-            const tipText = esc(d.failedChecks.join(", "));
-            labels += `<span class="pr-label pr-label-failed" title="${tipText}">${d.failedChecks.length} check(s) failed</span>`;
+            const checksUrl = link.href ? link.href.replace(/\/$/, "") + "/checks" : "";
+            const checksLink = checksUrl ? ` <a href="${esc(checksUrl)}" target="_blank" rel="noopener" style="font-size:.75rem;">View checks</a>` : "";
+            labels += `<span class="pr-label pr-label-failed">${d.failedChecks.length} check(s) failed${checksLink}</span>`;
           }
           if (!lazyMerged && d.isApproved && d.approvedBy && d.approvedBy.length) {
             const tipText = "Approved by: " + esc(d.approvedBy.join(", "));
@@ -1113,14 +1352,18 @@
         });
 
         const oldAction = detailsEl.querySelector(".action-required-section");
-        const newActionHTML = actionRequiredHTML(plan);
-        if (oldAction) {
-          if (newActionHTML) oldAction.outerHTML = newActionHTML;
-          else oldAction.remove();
-        } else if (newActionHTML) {
-          const insertBefore = detailsEl.querySelector(".action-note") || detailsEl.querySelector(".detail-agent-link");
-          if (insertBefore) insertBefore.insertAdjacentHTML("beforebegin", newActionHTML);
-          else detailsEl.insertAdjacentHTML("beforeend", newActionHTML);
+        if (plan._pmAction) {
+          if (oldAction) oldAction.remove();
+        } else {
+          const newActionHTML = actionRequiredHTML(plan);
+          if (oldAction) {
+            if (newActionHTML) oldAction.outerHTML = newActionHTML;
+            else oldAction.remove();
+          } else if (newActionHTML) {
+            const insertBefore = detailsEl.querySelector(".action-note") || detailsEl.querySelector(".detail-agent-link");
+            if (insertBefore) insertBefore.insertAdjacentHTML("beforebegin", newActionHTML);
+            else detailsEl.insertAdjacentHTML("beforeend", newActionHTML);
+          }
         }
       }
     } catch (err) {
@@ -1198,8 +1441,20 @@
     return el.innerHTML;
   }
 
-  function showLoading(show) {
-    $("#loading").style.display = show ? "" : "none";
+  function showLoading(show, message) {
+    const el = $("#loading");
+    el.style.display = show ? "" : "none";
+    if (message) {
+      const p = el.querySelector("p");
+      if (p) p.textContent = message;
+    }
+  }
+
+  function hideLoading() {
+    showLoading(false);
+    // Reset default message
+    const p = $("#loading").querySelector("p");
+    if (p) p.textContent = "Loading release plans\u2026";
   }
 
   function showError(msg) {
@@ -1326,6 +1581,13 @@
     }, 250);
   });
 
+  // Global plane filter — re-renders all tabs
+  document.getElementById("global-plane-filter").addEventListener("change", () => {
+    render(allPlans);
+    if (currentUserIsPM) renderPMView(allPlans);
+    renderFilteredPRs();
+  });
+
   // ══════════════════════════════════════════════════════════════
   // ── PM View Tab ────────────────────────────────────────────────
   // ══════════════════════════════════════════════════════════════
@@ -1334,11 +1596,32 @@
 
   function isMissingTier1(p) {
     if (p.state === "Finished") return false;
-    const rt = (p.releaseType || "").toLowerCase();
-    if (rt.includes("private")) return false;
+    if (isPrivatePreviewPlan(p)) return false;
     const langs = p.languages || {};
     const plane = classifyPlane(p);
+    // For dataplane, only flag tier 1 missing for GA release plans (skip preview)
+    if (plane === "data") {
+      const rpt = (p.releasePlanType || "").toLowerCase();
+      if (!rpt.includes("ga")) return false;
+    }
+    // Skip beta SDK release types
+    const sdkType = (p.releaseType || "").toLowerCase();
+    if (sdkType.includes("beta")) return false;
     const tier1 = plane === "mgmt" ? TIER1_MGMT : TIER1_DATA;
+
+    // Only flag tier 1 missing if at least one language already has SDK generated
+    const anyGenerated = Object.keys(langs).some(k => {
+      if (isLangExcluded(langs[k].exclusionStatus)) return false;
+      const l = langs[k];
+      if (l.sdkPrUrl) return true;
+      const rs = (l.releaseStatus || "").toLowerCase();
+      if (rs.includes("completed") || rs.includes("released")) return true;
+      const ps = (l.sdkPrGitHubStatus || l.prStatus || "").toLowerCase();
+      if (ps.includes("merged") || ps.includes("completed")) return true;
+      return false;
+    });
+    if (!anyGenerated) return false;
+
     const missing = [];
     for (const t1 of tier1) {
       const key = Object.keys(langs).find(k => k.toLowerCase() === t1);
@@ -1361,42 +1644,58 @@
   }
 
   function renderPMView(plans) {
+    const planeFilter = getGlobalPlaneFilter();
+    const filtered = planeFilter ? plans.filter(p => classifyPlane(p) === planeFilter) : plans;
+
     const inactive = [];
     const tier1Missing = [];
     const partial = [];
 
-    for (const p of plans) {
+    for (const p of filtered) {
       if (p.state === "Finished") continue;
-      if (isInactive(p)) inactive.push(p);
+      delete p._pmAction; // reset
+      const isPartial = isPartiallyReleased(p);
+
+      if (isInactive(p) && !isPartial) {
+        const planId = p.releasePlanId || p.id;
+        const hasSpecPr = p.apiSpec && p.apiSpec.specPrUrl;
+        const abandonPrompt = `Abandon release plan ${esc(String(planId))}`;
+        let actionHtml = hasSpecPr
+          ? "This release plan has been inactive for over 3 months."
+          : "This release plan has no spec PR and has been inactive for over 3 months.";
+        actionHtml += `<div class="pm-action-steps">
+          <strong>To abandon this release plan:</strong>
+          <ol>
+            <li>Clone an Azure SDK or <a href="https://github.com/Azure/azure-rest-api-specs" target="_blank" rel="noopener">azure-rest-api-specs</a> repo and open Copilot CLI or VS Code from the repo root.</li>
+            <li>Copy and run the following prompt:<br><code class="action-prompt-inline">${abandonPrompt}</code></li>
+          </ol>
+        </div>`;
+        p._pmAction = actionHtml;
+        inactive.push(p);
+      }
       const missing = isMissingTier1(p);
       if (missing) {
         p._missingTier1 = missing;
+        const wiUrl = `https://dev.azure.com/azure-sdk/Release/_workitems/edit/${p.id}`;
+        p._pmAction = `SDK PRs are missing for tier 1 languages: <strong>${missing.join(", ")}</strong>. Reach out to service team to confirm if SDK generation is pending.
+        <div class="pm-action-steps">
+          <strong>To exclude a language from this release plan:</strong>
+          <ol>
+            <li>Open the <a href="${esc(wiUrl)}" target="_blank" rel="noopener">DevOps work item</a> for this release plan and go to the SDK Details tab.</li>
+            <li>Identify the language and update its Release Exclusion Status to <strong>Approved</strong>.</li>
+          </ol>
+        </div>`;
         tier1Missing.push(p);
       }
-      if (isPartiallyReleased(p)) partial.push(p);
+      if (isPartial && !missing) {
+        p._pmAction = "Reach out to service team and confirm the plan to release remaining languages.";
+        partial.push(p);
+      }
     }
 
-    renderPMSection("list-pm-inactive", inactive, (p) => {
-      const lastAct = p.lastActivity ? shortDate(p.lastActivity) : "Unknown";
-      return `<span class="pm-tag pm-tag-inactive">Last activity: ${lastAct}</span>`;
-    });
-    renderPMSection("list-pm-tier1", tier1Missing, (p) => {
-      const missing = (p._missingTier1 || []).map(l => `<span class="pm-tag pm-tag-lang">${esc(l)}</span>`).join(" ");
-      return `Missing: ${missing}`;
-    });
-    renderPMSection("list-pm-partial", partial, (p) => {
-      const langs = p.languages || {};
-      const released = [];
-      const unreleased = [];
-      for (const [lang, l] of Object.entries(langs)) {
-        if (isLangExcluded(l.exclusionStatus)) continue;
-        const rs = (l.releaseStatus || "").toLowerCase();
-        if (rs.includes("completed") || rs.includes("released")) released.push(lang);
-        else unreleased.push(lang);
-      }
-      return `<span class="pm-tag pm-tag-released">Released: ${released.join(", ") || "none"}</span> ` +
-             `<span class="pm-tag pm-tag-unreleased">Pending: ${unreleased.join(", ") || "none"}</span>`;
-    });
+    renderPMSection("list-pm-inactive", inactive);
+    renderPMSection("list-pm-tier1", tier1Missing);
+    renderPMSection("list-pm-partial", partial);
 
     // Update section counts
     const sections = [
@@ -1413,32 +1712,15 @@
     }
   }
 
-  function renderPMSection(listId, plans, extraFn) {
+  function renderPMSection(listId, plans) {
     const el = document.getElementById(listId);
     if (!el) return;
     if (!plans.length) {
       el.innerHTML = '<div class="empty-msg">None found ✓</div>';
       return;
     }
-    const planUrl = "https://dev.azure.com/azure-sdk/Release/_workitems/edit/";
-    el.innerHTML = plans.map(p => {
-      const plane = classifyPlane(p);
-      const planeBadge = plane === "mgmt"
-        ? '<span class="plane-badge plane-badge-mgmt">Mgmt</span>'
-        : '<span class="plane-badge plane-badge-data">Data</span>';
-      const extra = extraFn ? extraFn(p) : "";
-      return `<div class="pm-card">
-        <div class="pm-card-top">
-          ${planeBadge}
-          <a href="${planUrl}${p.releasePlanId}" target="_blank" class="pm-plan-link">#${p.releasePlanId}</a>
-          <strong>${esc(p.productName || p.title)}</strong>
-          <span class="pm-service">${esc(p.serviceName || "")}</span>
-          <span class="pm-state state-${(p.state || "").toLowerCase().replace(/\s+/g, "-")}">${esc(p.state)}</span>
-          <span class="pm-owner">${esc(p.submittedBy || "")}</span>
-        </div>
-        <div class="pm-card-extra">${extra}</div>
-      </div>`;
-    }).join("");
+    el.innerHTML = plans.map(cardHTML).join("");
+    attachCardHandlers(el, plans);
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -1455,6 +1737,9 @@
       btn.classList.add("active");
       const target = document.getElementById(targetId);
       if (target) target.classList.add("active");
+      // Show/hide PR-specific filters in the tab bar
+      const prFilters = document.getElementById("pr-tab-filters");
+      if (prFilters) prFilters.style.display = targetId === "tab-sdk-prs" ? "" : "none";
     });
   });
 
@@ -1482,8 +1767,7 @@
     for (const p of plans) {
       if (!p.languages) continue;
       if (p.state === "Finished") continue;
-      const rt = (p.releaseType || "").toLowerCase();
-      if (rt.includes("private")) continue;
+      if (isPrivatePreviewPlan(p)) continue;
       for (const [lang, l] of Object.entries(p.languages)) {
         if (isLangExcluded(l.exclusionStatus)) continue;
         if (!l.sdkPrUrl) continue;
@@ -1501,6 +1785,7 @@
         prs.push({
           prUrl: l.sdkPrUrl, language: lang, packageName: l.packageName || "",
           releasePlanId: p.releasePlanId || "", planTitle: p.title || "", planId: p.id,
+          plane: classifyPlane(p),
           releaseMonth: p.releaseMonth || "", releaseMonthDate: parseReleaseMonth(p.releaseMonth),
           prStatus: l.sdkPrGitHubStatus || l.prStatus || "", releaseStatus: l.releaseStatus || "",
           repo, prNumber, prDetails: l.prDetails || null, _statusLoaded: false,
@@ -1602,8 +1887,10 @@
     const langFilter = (document.getElementById("pr-filter-lang") || {}).value || "";
     const statusFilter = (document.getElementById("pr-filter-status") || {}).value || "";
     const textFilter = ($("#search-box").value || "").toLowerCase();
+    const planeFilter = getGlobalPlaneFilter();
 
     return prs.filter(pr => {
+      if (planeFilter && pr.plane !== planeFilter) return false;
       if (langFilter && pr.language !== langFilter) return false;
       if (statusFilter) {
         const st = (pr.prStatus || "").toLowerCase();
@@ -1677,7 +1964,9 @@
       const prIsOpenOrDraft = !prIsMerged && !prIsClosed;
       // Failed checks — only for open/draft PRs
       if (prIsOpenOrDraft && d.failedChecks && d.failedChecks.length) {
-        html += `<div class="pr-detail-row" style="color:var(--red);"><strong>⚠️ Failed Checks (${d.failedChecks.length}):</strong> ${esc(d.failedChecks.join(", "))}</div>`;
+        const checksUrl = pr.prUrl ? pr.prUrl.replace(/\/$/, "") + "/checks" : "";
+        const checksLink = checksUrl ? ` <a href="${esc(checksUrl)}" target="_blank" rel="noopener">View checks →</a>` : "";
+        html += `<div class="pr-detail-row" style="color:var(--red);"><strong>⚠️ ${d.failedChecks.length} check(s) failed</strong>${checksLink}</div>`;
       }
       // Approval
       if (!prIsMerged && d.isApproved && d.approvedBy && d.approvedBy.length) {

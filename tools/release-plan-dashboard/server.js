@@ -6,6 +6,79 @@ const https = require("https");
 const crypto = require("crypto");
 const path = require("path");
 
+// ── GitHub App token minting via Azure Key Vault ──────────────
+// Mints a GitHub App installation access token by signing a JWT
+// with a non-exportable RSA key in Azure Key Vault.
+const KEYVAULT_NAME = process.env.KEYVAULT_NAME || "azuresdkengkeyvault";
+const KEYVAULT_KEY_NAME = process.env.KEYVAULT_KEY_NAME || "azure-sdk-automation";
+const GITHUB_APP_ID = process.env.GITHUB_APP_NUMERIC_ID || "1086291";
+const GITHUB_INSTALL_OWNER = process.env.GITHUB_INSTALL_OWNER || "Azure";
+const GH_TOKEN_REFRESH_MS = 50 * 60 * 1000; // refresh every 50 min (token valid ~1 hr)
+
+let _mintedGhToken = null;
+let _ghTokenMintedAt = 0;
+
+function base64UrlEncode(buffer) {
+  const b64 = (Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer)).toString("base64");
+  return b64.replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+
+async function mintGitHubAppToken() {
+  try {
+    const { DefaultAzureCredential } = require("@azure/identity");
+    const { CryptographyClient, KeyClient } = require("@azure/keyvault-keys");
+
+    const credential = new DefaultAzureCredential();
+    const vaultUrl = `https://${KEYVAULT_NAME}.vault.azure.net`;
+    const keyClient = new KeyClient(vaultUrl, credential);
+    const key = await keyClient.getKey(KEYVAULT_KEY_NAME);
+    const cryptoClient = new CryptographyClient(key.id, credential);
+
+    // Build JWT header & payload
+    const header = JSON.stringify({ alg: "RS256", typ: "JWT" });
+    const nowSec = Math.floor(Date.now() / 1000);
+    const payload = JSON.stringify({ iat: nowSec - 10, exp: nowSec + 600, iss: GITHUB_APP_ID });
+    const unsignedToken = `${base64UrlEncode(header)}.${base64UrlEncode(payload)}`;
+
+    // Sign with Key Vault (RS256)
+    const digest = crypto.createHash("sha256").update(unsignedToken, "ascii").digest();
+    const signResult = await cryptoClient.sign("RS256", digest);
+    if (!signResult.result) throw new Error("Key Vault sign returned no result.");
+    const jwt = `${unsignedToken}.${base64UrlEncode(Buffer.from(signResult.result))}`;
+
+    // Get installation ID for the owner
+    const apiHeaders = {
+      Authorization: `Bearer ${jwt}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": "release-plan-dashboard",
+    };
+    const instRes = await fetch("https://api.github.com/app/installations", { headers: apiHeaders });
+    if (!instRes.ok) throw new Error(`GitHub installations API ${instRes.status}: ${await instRes.text()}`);
+    const installations = await instRes.json();
+    const match = installations.find(i => i.account.login.toLowerCase() === GITHUB_INSTALL_OWNER.toLowerCase());
+    if (!match) throw new Error(`No GitHub App installation found for owner "${GITHUB_INSTALL_OWNER}".`);
+
+    // Exchange JWT for installation access token
+    const tokenRes = await fetch(`https://api.github.com/app/installations/${match.id}/access_tokens`, {
+      method: "POST", headers: apiHeaders,
+    });
+    if (!tokenRes.ok) throw new Error(`GitHub token exchange ${tokenRes.status}: ${await tokenRes.text()}`);
+    const tokenData = await tokenRes.json();
+    if (!tokenData.token) throw new Error("GitHub token exchange returned no token.");
+
+    _mintedGhToken = tokenData.token;
+    _ghTokenMintedAt = Date.now();
+    process.env.GH_TOKEN = _mintedGhToken;
+    console.log(`GitHub App installation token minted successfully (owner: ${GITHUB_INSTALL_OWNER}).`);
+    return _mintedGhToken;
+  } catch (err) {
+    console.warn(`GitHub App token minting failed: ${err.message}`);
+    console.warn("Falling back to GITHUB_PAT_RELEASE_PLAN or pre-set GH_TOKEN.");
+    return null;
+  }
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -25,12 +98,14 @@ const DEVOPS_ORG = "https://dev.azure.com/azure-sdk";
 const DEVOPS_PROJECT = "Release";
 const API_VERSION = "7.1";
 const BATCH_SIZE = 200;
-const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour for release plans + basic PR status
+const PR_DETAIL_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes for on-demand SDK PR details
 
 // ── In-memory caches ──────────────────────────────────────────
 const cache = {
   releasePlans: { data: null, fetchedAt: null, updatedAt: 0, refreshing: false },
   prDetails: new Map(), // url -> { data, updatedAt }
+  prStatuses: new Map(), // url -> { data, updatedAt } — basic status (open/merged/closed/draft)
 };
 
 const LANGUAGES = ["Dotnet", "JavaScript", "Python", "Java", "Go"];
@@ -130,7 +205,7 @@ app.use(requireAuth);
 app.get("/login", (req, res) => {
   if (req.session && req.session.user) return res.redirect("/");
   const errorMsg = req.query.error ? `<div class="error">${escapeHtml(req.query.error)}</div>` : "";
-  res.send(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Login</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f3f2f1}.login-box{background:#fff;padding:2.5rem;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.12);text-align:center;max-width:400px}h1{font-size:1.4rem;margin:0 0 .5rem;color:#323130}p{color:#605e5c;margin:0 0 1.5rem;font-size:.9rem}.btn{display:inline-block;padding:.7rem 1.5rem;background:#24292f;color:#fff;text-decoration:none;border-radius:6px;font-size:1rem}.btn:hover{background:#32383f}.error{color:#a4262c;background:#fde7e9;padding:.6rem 1rem;border-radius:4px;margin-bottom:1rem;font-size:.85rem}</style></head><body><div class="login-box"><h1>Release Plan Dashboard</h1><p>Sign in with GitHub. You must be a member of the <strong>Microsoft</strong> or <strong>Azure</strong> org.</p>${errorMsg}<a class="btn" href="/auth/github">Sign in with GitHub</a></div></body></html>`);
+  res.send(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Login</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f3f2f1}.login-box{background:#fff;padding:2.5rem;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.12);text-align:center;max-width:400px}h1{font-size:1.4rem;margin:0 0 .5rem;color:#323130}p{color:#605e5c;margin:0 0 1.5rem;font-size:.9rem}.btn{display:inline-block;padding:.7rem 1.5rem;background:#24292f;color:#fff;text-decoration:none;border-radius:6px;font-size:1rem}.btn:hover{background:#32383f}.error{color:#a4262c;background:#fde7e9;padding:.6rem 1rem;border-radius:4px;margin-bottom:1rem;font-size:.85rem}.note{color:#605e5c;font-size:.8rem;margin-top:1rem}</style></head><body><div class="login-box"><h1>Release Plan Dashboard</h1><p>Sign in with GitHub. You must be a public member of the <strong>Microsoft</strong> or <strong>Azure</strong> org.</p>${errorMsg}<a class="btn" href="/auth/github">Sign in with GitHub</a><p class="note">If login fails, ensure your membership in the Microsoft or Azure GitHub org is set to <strong>Public</strong> in your GitHub profile settings.</p></div></body></html>`);
 });
 
 // ── OAuth routes ──────────────────────────────────────────────
@@ -158,7 +233,7 @@ app.get("/auth/github/callback", async (req, res) => {
     if (!user) return res.redirect("/login?error=Failed+to+get+GitHub+user+info.");
     console.log(`Authenticated user: ${user.login} (${user.name || "no name"})`);
     const isMember = await isMemberOfAnyOrg(token, user.login, REQUIRED_ORGS);
-    if (!isMember) return res.redirect(`/login?error=You+must+be+an+active+member+of+the+Microsoft+or+Azure+GitHub+org.`);
+    if (!isMember) return res.redirect(`/login?error=You+must+be+a+public+member+of+the+Microsoft+or+Azure+GitHub+org.+Please+ensure+your+org+membership+is+set+to+Public+in+your+GitHub+profile.`);
     req.session.user = { login: user.login, name: user.name || user.login, avatar: user.avatar_url || "" };
     req.session.githubToken = token;
     const returnTo = req.session.returnTo || "/";
@@ -185,7 +260,7 @@ app.get("/auth/me", (req, res) => {
 // ══════════════════════════════════════════════════════════════
 
 function githubRequest(apiPath, _retryCount = 0) {
-  const pat = process.env.GITHUB_PAT_RELEASE_PLAN;
+  const pat = process.env.GITHUB_PAT_RELEASE_PLAN || process.env.GH_TOKEN;
   if (!pat) return Promise.resolve(null);
   return _githubRequestWithAuth(`token ${pat}`, apiPath, _retryCount);
 }
@@ -208,13 +283,20 @@ function _githubRequestWithAuth(authHeader, apiPath, _retryCount = 0) {
         if (res.statusCode >= 200 && res.statusCode < 300) {
           try { resolve(JSON.parse(data)); } catch { resolve(null); }
         } else if ((res.statusCode === 403 || res.statusCode === 429) && _retryCount < 2) {
-          const retryAfter = parseInt(res.headers["retry-after"] || "0", 10);
-          const resetEpoch = parseInt(res.headers["x-ratelimit-reset"] || "0", 10);
-          let waitMs = retryAfter ? retryAfter * 1000 : 0;
-          if (!waitMs && resetEpoch) waitMs = Math.max(0, resetEpoch * 1000 - Date.now()) + 1000;
-          waitMs = Math.min(waitMs || 5000, 60000);
-          console.warn(`GitHub rate limited (${res.statusCode}) ${apiPath}, retry in ${waitMs}ms`);
-          setTimeout(() => _githubRequestWithAuth(authHeader, apiPath, _retryCount + 1).then(resolve, reject), waitMs);
+          // Don't retry SAML SSO or permission errors — they won't resolve with retries
+          const isSamlOrAuth = data.includes("SAML enforcement") || data.includes("organization has enabled") || data.includes("Resource protected");
+          if (res.statusCode === 403 && isSamlOrAuth) {
+            console.warn(`GitHub SAML/SSO error (403) ${apiPath}: ${data.substring(0, 200)}`);
+            resolve(null);
+          } else {
+            const retryAfter = parseInt(res.headers["retry-after"] || "0", 10);
+            const resetEpoch = parseInt(res.headers["x-ratelimit-reset"] || "0", 10);
+            let waitMs = retryAfter ? retryAfter * 1000 : 0;
+            if (!waitMs && resetEpoch) waitMs = Math.max(0, resetEpoch * 1000 - Date.now()) + 1000;
+            waitMs = Math.min(waitMs || 5000, 60000);
+            console.warn(`GitHub rate limited (${res.statusCode}) ${apiPath}, retry in ${waitMs}ms`);
+            setTimeout(() => _githubRequestWithAuth(authHeader, apiPath, _retryCount + 1).then(resolve, reject), waitMs);
+          }
         } else {
           console.warn(`GitHub ${apiPath} returned ${res.statusCode}: ${data.substring(0, 200)}`);
           resolve(null);
@@ -360,7 +442,7 @@ async function throttledMap(items, fn, { concurrency = 10, delayMs = 50 } = {}) 
 async function batchFetchPrStatuses(urls) {
   const unique = [...new Set(urls.filter(Boolean))];
   const m = new Map();
-  if (!unique.length || !process.env.GITHUB_PAT_RELEASE_PLAN) return m;
+  if (!unique.length || !(process.env.GITHUB_PAT_RELEASE_PLAN || process.env.GH_TOKEN)) return m;
   await throttledMap(unique, async (url) => {
     try { m.set(url, await getGitHubPrStatus(url)); } catch { m.set(url, null); }
   }, { concurrency: 10, delayMs: 50 });
@@ -370,7 +452,7 @@ async function batchFetchPrStatuses(urls) {
 async function batchFetchPrDetails(urls) {
   const unique = [...new Set(urls.filter(Boolean))];
   const m = new Map();
-  if (!unique.length || !process.env.GITHUB_PAT_RELEASE_PLAN) return m;
+  if (!unique.length || !(process.env.GITHUB_PAT_RELEASE_PLAN || process.env.GH_TOKEN)) return m;
   await throttledMap(unique, async (url) => {
     try { m.set(url, await getGitHubPrDetails(url)); } catch { m.set(url, null); }
   }, { concurrency: 10, delayMs: 50 });
@@ -410,7 +492,7 @@ function deriveSpecProjectPath(files) {
 async function batchFetchSpecProjectPaths(urls) {
   const unique = [...new Set(urls.filter(Boolean))];
   const m = new Map();
-  if (!unique.length || !process.env.GITHUB_PAT_RELEASE_PLAN) return m;
+  if (!unique.length || !(process.env.GITHUB_PAT_RELEASE_PLAN || process.env.GH_TOKEN)) return m;
   await throttledMap(unique, async (url) => {
     try { const files = await getGitHubPrFiles(url); m.set(url, deriveSpecProjectPath(files)); } catch { m.set(url, ""); }
   }, { concurrency: 10, delayMs: 50 });
@@ -426,7 +508,7 @@ const RELEASE_PLAN_FIELDS = [
   "Custom.SDKReleasemonth","Custom.SDKtypetobereleased","Custom.ReleasePlanID","Custom.ReleasePlanLink",
   "Custom.ReleasePlanSubmittedby","Custom.PrimaryPM","Custom.ApiSpecProjectPath",
   "Custom.MgmtScope","Custom.DataScope","Custom.SDKLanguages","Custom.APISpecApprovalStatus",
-  "Custom.ProductName","Custom.ProductLifecycle","Custom.ServiceName",
+  "Custom.ProductName","Custom.ProductLifecycle","Custom.ServiceName","Custom.ReleasePlanType",
   "Custom.CreatedUsing","Custom.ProductServiceTreeID","Custom.ProductServiceTreeLink",
 ];
 for (const lang of LANGUAGES) {
@@ -547,7 +629,7 @@ function stripEmail(val) {
 
 function mapReleasePlan(wi, apiSpecMap) {
   const f = wi.fields || {};
-  const id = f["System.Id"];
+  const id = wi.id || f["System.Id"];
   const languages = {};
   for (const lang of LANGUAGES) {
     languages[LANGUAGE_DISPLAY[lang]] = {
@@ -602,6 +684,7 @@ function mapReleasePlan(wi, apiSpecMap) {
     sdkLanguages: f["Custom.SDKLanguages"] || "",
     specApprovalStatus: f["Custom.APISpecApprovalStatus"] || "",
     productName: f["Custom.ProductName"] || "", productLifecycle: f["Custom.ProductLifecycle"] || "",
+    releasePlanType: f["Custom.ReleasePlanType"] || "",
     serviceName: f["Custom.ServiceName"] || "",
     createdUsing: f["Custom.CreatedUsing"] || "",
     productId: f["Custom.ProductServiceTreeID"] || "",
@@ -706,7 +789,7 @@ async function fetchAllReleasePlans() {
 
 // Shared enrichment: adds apiReadiness, specProjectPath, package details to plans.
 async function enrichPlans(plans) {
-  if (process.env.GITHUB_PAT_RELEASE_PLAN) {
+  if (process.env.GITHUB_PAT_RELEASE_PLAN || process.env.GH_TOKEN) {
     const specPrUrls = [];
     const specPrUrlsForPath = []; // only fetch files if plan lacks a spec path
     for (const p of plans) {
@@ -757,7 +840,7 @@ async function enrichPlans(plans) {
   } catch (err) { console.warn("Package enrichment error:", err.message); }
 
   // Fetch SDK PR status only (open/merged/closed) — details fetched on-demand when card is expanded
-  if (process.env.GITHUB_PAT_RELEASE_PLAN) {
+  if (process.env.GITHUB_PAT_RELEASE_PLAN || process.env.GH_TOKEN) {
     const sdkPrUrls = [];
     for (const p of plans) {
       for (const [, li] of Object.entries(p.languages || {})) {
@@ -768,14 +851,18 @@ async function enrichPlans(plans) {
     if (uniqueSdkPrUrls.length) {
       console.log(`Fetching SDK PR statuses for ${uniqueSdkPrUrls.length} unique PRs...`);
       const statusMap = await batchFetchPrStatuses(uniqueSdkPrUrls);
+      const now = Date.now();
       for (const p of plans) {
         for (const [, li] of Object.entries(p.languages || {})) {
           if (!li.sdkPrUrl) continue;
           const st = statusMap.get(li.sdkPrUrl);
-          if (st) li.sdkPrGitHubStatus = st;
+          if (st) {
+            li.sdkPrGitHubStatus = st;
+            cache.prStatuses.set(li.sdkPrUrl, { data: st, updatedAt: now });
+          }
         }
       }
-      console.log(`SDK PR statuses fetched for ${uniqueSdkPrUrls.length} PRs.`);
+      console.log(`SDK PR statuses fetched and cached for ${uniqueSdkPrUrls.length} PRs.`);
     }
   }
 
@@ -805,6 +892,10 @@ async function refreshReleasePlansCache() {
 
 // Get cached release plans, refreshing if stale.
 async function getCachedReleasePlans() {
+  if (!cache.releasePlans.data && cache.releasePlans.refreshing) {
+    // Cache is still warming up from startup
+    return { plans: [], fetchedAt: null, loading: true };
+  }
   const age = Date.now() - cache.releasePlans.updatedAt;
   if (!cache.releasePlans.data || age > CACHE_TTL_MS) {
     await refreshReleasePlansCache();
@@ -855,8 +946,63 @@ app.post("/api/refresh", async (req, res) => {
   try {
     await refreshReleasePlansCache();
     cache.prDetails.clear();
+    cache.prStatuses.clear();
     res.json({ ok: true, fetchedAt: cache.releasePlans.fetchedAt });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Refresh a single release plan: re-fetches from DevOps, enriches, and updates cache.
+app.post("/api/refresh-plan/:id", async (req, res) => {
+  try {
+    const wiId = parseInt(req.params.id, 10);
+    if (!wiId) return res.status(400).json({ error: "Invalid work item ID" });
+
+    // Fetch the single work item with full expand (includes relations for child IDs)
+    const wiUrl = `${DEVOPS_ORG}/_apis/wit/workitems?ids=${wiId}&$expand=All&api-version=${API_VERSION}`;
+    const wiResult = await devopsRequest(wiUrl, "GET");
+    const workItems = wiResult.value || [];
+    if (!workItems.length) return res.status(404).json({ error: "Work item not found" });
+    const wi = workItems[0];
+
+    // Fetch API Spec child work items
+    const childIds = extractChildIds(wi);
+    const apiSpecMap = {};
+    if (childIds.length) {
+      const childItems = await fetchWorkItemsBatch(childIds, API_SPEC_FIELDS);
+      for (const c of childItems) {
+        if ((c.fields["System.WorkItemType"] || "") === "API Spec") apiSpecMap[c.id] = c;
+      }
+    }
+
+    // Map to plan object
+    const plan = mapReleasePlan(wi, apiSpecMap);
+
+    // Enrich: fetch spec PR status, SDK PR status, package info
+    await enrichPlans([plan]);
+
+    // Invalidate PR detail caches for this plan's SDK PRs so expansion fetches fresh data
+    for (const [, li] of Object.entries(plan.languages || {})) {
+      if (li.sdkPrUrl) {
+        cache.prDetails.delete(li.sdkPrUrl);
+        cache.prStatuses.delete(li.sdkPrUrl);
+      }
+    }
+
+    // Update the plan in the global release plans cache
+    if (cache.releasePlans.data && cache.releasePlans.data.plans) {
+      const idx = cache.releasePlans.data.plans.findIndex(p => p.id === wiId);
+      if (idx >= 0) {
+        cache.releasePlans.data.plans[idx] = plan;
+      } else {
+        cache.releasePlans.data.plans.push(plan);
+      }
+    }
+
+    res.json({ plan });
+  } catch (err) {
+    console.error("Refresh plan error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -909,23 +1055,31 @@ app.get("/api/previous-sdk-prs/:id", async (req, res) => {
 });
 
 // Batch PR status endpoint — returns just open/draft/merged/closed for multiple URLs.
-// Uses user's OAuth token, falls back to PAT.
+// Uses server-side prStatuses cache (1-hour TTL, populated during enrichPlans).
 app.post("/api/pr-statuses", async (req, res) => {
   try {
     const urls = (req.body && req.body.urls) || [];
-    const userToken = req.session && req.session.githubToken;
-    const hasPat = !!process.env.GITHUB_PAT_RELEASE_PLAN;
-    if (!urls.length || (!userToken && !hasPat)) return res.json({ statuses: {} });
+    const hasGhToken = !!(process.env.GITHUB_PAT_RELEASE_PLAN || process.env.GH_TOKEN);
+    if (!urls.length || !hasGhToken) return res.json({ statuses: {} });
     const unique = [...new Set(urls.filter(Boolean))];
     const result = {};
-    if (userToken) {
-      await throttledMap(unique, async (url) => {
-        try { result[url] = await getGitHubPrStatusWithToken(userToken, url); }
-        catch { result[url] = null; }
-      }, { concurrency: 5, delayMs: 100 });
-    } else {
-      const statusMap = await batchFetchPrStatuses(unique);
-      for (const url of unique) result[url] = statusMap.get(url) || null;
+    const now = Date.now();
+    const toFetch = [];
+    for (const url of unique) {
+      const entry = cache.prStatuses.get(url);
+      if (entry && (now - entry.updatedAt) < CACHE_TTL_MS) {
+        result[url] = entry.data;
+      } else {
+        toFetch.push(url);
+      }
+    }
+    if (toFetch.length) {
+      const statusMap = await batchFetchPrStatuses(toFetch);
+      for (const url of toFetch) {
+        const st = statusMap.get(url) || null;
+        if (st) cache.prStatuses.set(url, { data: st, updatedAt: now });
+        result[url] = st;
+      }
     }
     res.json({ statuses: result });
   } catch (err) {
@@ -935,58 +1089,38 @@ app.post("/api/pr-statuses", async (req, res) => {
 });
 
 // Lazy-load endpoint: fetch SDK PR details + statuses.
-// Uses user's OAuth token from session, falls back to GITHUB_PAT_RELEASE_PLAN.
+// Uses prDetails cache (15-min TTL). Also updates prStatuses global cache with fresh status.
 app.post("/api/pr-details", async (req, res) => {
   try {
     const urls = (req.body && req.body.urls) || [];
-    const userToken = req.session && req.session.githubToken;
-    const hasPat = !!process.env.GITHUB_PAT_RELEASE_PLAN;
-    if (!urls.length || (!userToken && !hasPat)) return res.json({ details: {} });
+    const hasGhToken = !!(process.env.GITHUB_PAT_RELEASE_PLAN || process.env.GH_TOKEN);
+    if (!urls.length || !hasGhToken) return res.json({ details: {} });
     const unique = [...new Set(urls.filter(Boolean))];
     const result = {};
 
-    // Use user token (no shared cache to avoid leaking across sessions)
-    // Fall back to PAT-based shared cache if no user token
-    if (userToken) {
-      await throttledMap(unique, async (url) => {
-        try {
-          const pr = parseGitHubPrUrl(url);
-          if (!pr) { result[url] = null; return; }
-          const [statusData, detailData] = await Promise.all([
-            getGitHubPrStatusWithToken(userToken, url),
-            getGitHubPrDetailsWithToken(userToken, url),
-          ]);
-          result[url] = {
-            gitHubStatus: statusData || null,
-            prDetails: detailData ? { mergeable: detailData.mergeable, mergeableState: detailData.mergeableState, isApproved: detailData.isApproved, approvedBy: detailData.approvedBy, failedChecks: detailData.failedChecks, apiViewUrl: detailData.apiViewUrl || "", title: detailData.title || "", requestedReviewers: detailData.requestedReviewers || [], latestComment: detailData.latestComment || null, updatedAt: detailData.updatedAt || "" } : null,
-          };
-        } catch { result[url] = null; }
-      }, { concurrency: 10, delayMs: 50 });
-    } else {
-      // PAT fallback with shared cache
-      const now = Date.now();
-      const cached = {};
-      const toFetch = [];
-      for (const url of unique) {
-        const entry = cache.prDetails.get(url);
-        if (entry && (now - entry.updatedAt) < CACHE_TTL_MS) {
-          cached[url] = entry.data;
-        } else {
-          toFetch.push(url);
-        }
+    const now = Date.now();
+    const toFetch = [];
+    for (const url of unique) {
+      const entry = cache.prDetails.get(url);
+      if (entry && (now - entry.updatedAt) < PR_DETAIL_CACHE_TTL_MS) {
+        result[url] = entry.data;
+      } else {
+        toFetch.push(url);
       }
-      Object.assign(result, cached);
-      if (toFetch.length) {
-        const [statusMap, detailMap] = await Promise.all([batchFetchPrStatuses(toFetch), batchFetchPrDetails(toFetch)]);
-        for (const url of toFetch) {
-          const d = detailMap.get(url) || null;
-          const r = {
-            gitHubStatus: statusMap.get(url) || null,
-            prDetails: d ? { mergeable: d.mergeable, mergeableState: d.mergeableState, isApproved: d.isApproved, approvedBy: d.approvedBy, failedChecks: d.failedChecks, apiViewUrl: d.apiViewUrl || "", title: d.title || "", requestedReviewers: d.requestedReviewers || [], latestComment: d.latestComment || null, updatedAt: d.updatedAt || "" } : null,
-          };
-          cache.prDetails.set(url, { data: r, updatedAt: now });
-          result[url] = r;
-        }
+    }
+    if (toFetch.length) {
+      const [statusMap, detailMap] = await Promise.all([batchFetchPrStatuses(toFetch), batchFetchPrDetails(toFetch)]);
+      for (const url of toFetch) {
+        const d = detailMap.get(url) || null;
+        const st = statusMap.get(url) || null;
+        const r = {
+          gitHubStatus: st,
+          prDetails: d ? { mergeable: d.mergeable, mergeableState: d.mergeableState, isApproved: d.isApproved, approvedBy: d.approvedBy, failedChecks: d.failedChecks, apiViewUrl: d.apiViewUrl || "", title: d.title || "", requestedReviewers: d.requestedReviewers || [], latestComment: d.latestComment || null, updatedAt: d.updatedAt || "" } : null,
+        };
+        cache.prDetails.set(url, { data: r, updatedAt: now });
+        // Also update the global basic status cache with fresh data
+        if (st) cache.prStatuses.set(url, { data: st, updatedAt: now });
+        result[url] = r;
       }
     }
 
@@ -1001,14 +1135,26 @@ app.post("/api/pr-details", async (req, res) => {
 app.use(express.static(path.join(__dirname, "public")));
 
 // ── Start server + background cache refresh ──────────────────
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`Release Plan Dashboard running on http://localhost:${PORT}`);
   console.log(`GitHub OAuth enabled (orgs: ${REQUIRED_ORGS.join(", ")})`);
   if (!process.env.DEVOPS_RELEASE_PLAN_PAT) console.warn("WARNING: DEVOPS_RELEASE_PLAN_PAT not set.");
-  if (!process.env.GITHUB_PAT_RELEASE_PLAN) console.log("INFO: GITHUB_PAT_RELEASE_PLAN not set — server-side spec PR enrichment disabled. User OAuth tokens will be used for PR details.");
+
+  // Mint GitHub App token via Key Vault (falls back to PAT/GH_TOKEN if unavailable)
+  await mintGitHubAppToken();
+
+  if (!process.env.GITHUB_PAT_RELEASE_PLAN && !process.env.GH_TOKEN) {
+    console.log("WARNING: Neither GITHUB_PAT_RELEASE_PLAN nor GH_TOKEN is set and token minting failed — GitHub PR details and spec PR enrichment will be unavailable.");
+  }
 
   // Pre-warm cache on startup
   refreshReleasePlansCache().catch(err => console.error("Initial cache warm-up failed:", err.message));
+
+  // Refresh GitHub App token every 50 minutes (token valid ~1 hr)
+  setInterval(() => {
+    console.log("Scheduled GitHub App token refresh triggered.");
+    mintGitHubAppToken().catch(err => console.warn("Token refresh failed:", err.message));
+  }, GH_TOKEN_REFRESH_MS);
 
   // Refresh cache every hour in the background
   setInterval(() => {
