@@ -22,7 +22,7 @@
   <div class="tab-bar">
     <button class="tab-btn active" data-tab="tab-release-plans">Release Plans</button>
     <button class="tab-btn" data-tab="tab-sdk-prs">Review Required SDK Pull Requests</button>
-    <button class="tab-btn" data-tab="tab-pm-view" id="tab-btn-pm" style="display:none;">Attention Required from PM</button>
+    <button class="tab-btn" data-tab="tab-pm-view" id="tab-btn-pm" style="display:none;">Attention Required</button>
     <button id="btn-create-plan" class="btn-create-plan" title="How to create a release plan?">+ Create Release Plan</button>
     <div class="tab-bar-spacer"></div>
     <div id="pr-tab-filters" class="tab-bar-filters" style="display:none;">
@@ -200,16 +200,23 @@
     </div>
 
     <div id="pm-content">
+      <section id="section-pm-approaching" class="plan-section">
+        <h3 class="section-header" data-target="list-pm-approaching">
+          <span class="caret">&#9660;</span> 📅 Approaching SDK Release Target (This &amp; Next Month) <span class="section-count"></span>
+        </h3>
+        <div id="list-pm-approaching" class="plan-list"></div>
+      </section>
+
       <section id="section-pm-inactive" class="plan-section">
         <h3 class="section-header" data-target="list-pm-inactive">
-          <span class="caret">&#9660;</span> ⚠️ Inactive Release Plans (No activity for 3+ months) <span class="section-count"></span>
+          <span class="caret">&#9660;</span> ⚠️ Stale Release Plans (No activity for 3+ months) <span class="section-count"></span>
         </h3>
         <div id="list-pm-inactive" class="plan-list"></div>
       </section>
 
       <section id="section-pm-tier1" class="plan-section">
         <h3 class="section-header" data-target="list-pm-tier1">
-          <span class="caret">&#9660;</span> 🔴 Tier 1 Language Missing <span class="section-count"></span>
+          <span class="caret">&#9660;</span> 🔴 Release Plans Without SDK for All Languages <span class="section-count"></span>
         </h3>
         <div id="list-pm-tier1" class="plan-list"></div>
       </section>
@@ -219,6 +226,13 @@
           <span class="caret">&#9660;</span> 🟡 Partially Released <span class="section-count"></span>
         </h3>
         <div id="list-pm-partial" class="plan-list"></div>
+      </section>
+
+      <section id="section-pm-finished" class="plan-section">
+        <h3 class="section-header" data-target="list-pm-finished">
+          <span class="caret">&#9660;</span> ✅ Recently Finished (Last 2 Months) <span class="section-count"></span>
+        </h3>
+        <div id="list-pm-finished" class="plan-list"></div>
       </section>
     </div>
   </div><!-- end tab-pm-view -->

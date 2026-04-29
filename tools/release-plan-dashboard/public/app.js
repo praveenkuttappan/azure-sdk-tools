@@ -13,8 +13,15 @@
   const createPlanBtn = document.getElementById("btn-create-plan");
   const createPlanModal = document.getElementById("create-plan-modal");
   const modalCloseBtn = document.getElementById("modal-close");
+  // Store original modal content so it can be restored after action popups reuse the modal
+  const _originalModalTitle = createPlanModal ? createPlanModal.querySelector(".modal-header h2").innerHTML : "";
+  const _originalModalBody = createPlanModal ? createPlanModal.querySelector(".modal-body").innerHTML : "";
   if (createPlanBtn && createPlanModal) {
-    createPlanBtn.addEventListener("click", () => { createPlanModal.style.display = ""; });
+    createPlanBtn.addEventListener("click", () => {
+      createPlanModal.querySelector(".modal-header h2").innerHTML = _originalModalTitle;
+      createPlanModal.querySelector(".modal-body").innerHTML = _originalModalBody;
+      createPlanModal.style.display = "";
+    });
     modalCloseBtn.addEventListener("click", () => { createPlanModal.style.display = "none"; });
     createPlanModal.addEventListener("click", (e) => { if (e.target === createPlanModal) createPlanModal.style.display = "none"; });
   }
@@ -474,7 +481,7 @@
     // Attach collapse/expand handlers for cards (with lazy PR detail loading)
     container.querySelectorAll(".card-summary").forEach((el) => {
       el.addEventListener("click", (e) => {
-        if (e.target.closest("a") || e.target.closest(".plan-refresh-btn")) return;
+        if (e.target.closest("a") || e.target.closest(".plan-refresh-btn") || e.target.closest(".plan-share-btn")) return;
         const details = el.nextElementSibling;
         const opening = !details.classList.contains("open");
         details.classList.toggle("open");
@@ -564,6 +571,37 @@
         }
       });
     });
+    // Attach share button handlers
+    container.querySelectorAll(".plan-share-btn").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const planId = btn.dataset.planId;
+        if (!planId) return;
+        const shareUrl = `${window.location.origin}/?releasePlan=${encodeURIComponent(planId)}`;
+        const modal = document.getElementById("create-plan-modal");
+        if (modal) {
+          modal.querySelector(".modal-header h2").textContent = "Share Release Plan";
+          modal.querySelector(".modal-body").innerHTML = `
+            <p>Copy the link below to share this release plan:</p>
+            <div class="share-link-row">
+              <input type="text" class="share-link-input" value="${shareUrl.replace(/"/g, '&quot;')}" readonly />
+              <button class="share-copy-btn" title="Copy to clipboard">📋</button>
+            </div>`;
+          modal.style.display = "";
+          const copyBtn = modal.querySelector(".share-copy-btn");
+          const input = modal.querySelector(".share-link-input");
+          if (copyBtn && input) {
+            copyBtn.addEventListener("click", () => {
+              navigator.clipboard.writeText(input.value).then(() => {
+                copyBtn.textContent = "✅";
+                setTimeout(() => { copyBtn.textContent = "📋"; }, 1500);
+              });
+            });
+            input.addEventListener("click", () => input.select());
+          }
+        }
+      });
+    });
   }
 
   function updateCount(sectionId, count) {
@@ -630,6 +668,7 @@
           ${apiReadinessBadge(p)}
           ${pastDue ? '<span class="badge badge-pastdue">Past Due</span>' : ""}
         </div>
+        <button class="plan-share-btn" data-plan-id="${p.releasePlanId || p.id}" title="Share this release plan">&#x1F517;</button>
         <button class="plan-refresh-btn" data-plan-id="${p.id}" title="Refresh this release plan">&#x21bb;</button>
       </div>
       <div class="card-details">${detailHTML(p)}</div>
@@ -1650,10 +1689,37 @@
     const inactive = [];
     const tier1Missing = [];
     const partial = [];
+    const approaching = [];
+    const recentlyFinished = [];
+
+    const now = new Date();
+    const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const endOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 2, 0); // last day of next month
+    const twoMonthsAgo = new Date();
+    twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
 
     for (const p of filtered) {
-      if (p.state === "Finished") continue;
       delete p._pmAction; // reset
+
+      // Recently finished (last 2 months)
+      if (p.state === "Finished") {
+        const changed = new Date(p.changedDate);
+        if (!isNaN(changed.getTime()) && changed >= twoMonthsAgo) {
+          recentlyFinished.push(p);
+        }
+        continue;
+      }
+
+      // Approaching SDK release target (current month or next month, not yet finished)
+      if (p.releaseMonth) {
+        const target = parseReleaseMonth(p.releaseMonth);
+        if (target.getFullYear() !== 9999 && target >= thisMonth && target <= endOfNextMonth) {
+          p._pmAction = `SDK release target is <strong>${esc(p.releaseMonth)}</strong>. Ensure SDK generation and release are on track.`;
+          approaching.push(p);
+        }
+      }
+
       const isPartial = isPartiallyReleased(p);
 
       if (isInactive(p) && !isPartial) {
@@ -1693,15 +1759,19 @@
       }
     }
 
+    renderPMSection("list-pm-approaching", approaching);
     renderPMSection("list-pm-inactive", inactive);
     renderPMSection("list-pm-tier1", tier1Missing);
     renderPMSection("list-pm-partial", partial);
+    renderPMSection("list-pm-finished", recentlyFinished);
 
     // Update section counts
     const sections = [
+      { id: "section-pm-approaching", count: approaching.length },
       { id: "section-pm-inactive", count: inactive.length },
       { id: "section-pm-tier1", count: tier1Missing.length },
       { id: "section-pm-partial", count: partial.length },
+      { id: "section-pm-finished", count: recentlyFinished.length },
     ];
     for (const s of sections) {
       const sec = document.getElementById(s.id);
