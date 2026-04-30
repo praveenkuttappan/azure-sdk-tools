@@ -1,6 +1,6 @@
 {
   "name": "release-plan-dashboard",
-  "version": "1.0.0",
+  "version": "1.0.0-dev.1",
   "description": "Dashboard for Azure DevOps Release Plan work items",
   "main": "server.js",
   "scripts": {

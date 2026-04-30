@@ -614,6 +614,16 @@ main { padding: 16px 24px 40px; max-width: 1600px; margin: 0 auto; }
 /* Feed link icons */
 .feed-icon { vertical-align: middle; margin-right: 3px; }
 
+/* App footer */
+.app-footer {
+  text-align: center;
+  padding: 16px;
+  font-size: .75rem;
+  color: #8a8886;
+  border-top: 1px solid #edebe9;
+  margin-top: 40px;
+}
+
 /* PM View tab */
 #tab-pm-view { padding: 16px 24px 40px; max-width: 1600px; margin: 0 auto; }
 .pm-view-header { margin: 0 0 16px; }
