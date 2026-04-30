@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const AUTO_REFRESH_INTERVAL = 5 * 60; // seconds (5 minutes)
+  const AUTO_REFRESH_INTERVAL = 60 * 60; // seconds (1 hour)
   let refreshCountdown = AUTO_REFRESH_INTERVAL;
   let countdownTimer = null;
   let allPlans = [];
@@ -77,11 +77,21 @@
       showLoading(false);
       allPlans = data.plans || [];
 
+      // Populate month filter dropdown from available release months
+      populateMonthFilter(allPlans);
+
       // Apply URL filter param if present
       const urlFilter = params.get("filter") || "";
       if (urlFilter) {
         const searchBox = $("#search-box");
         if (searchBox) searchBox.value = urlFilter;
+      }
+
+      // Apply URL month param if present
+      const urlMonth = params.get("month") || "";
+      if (urlMonth) {
+        const monthSelect = document.getElementById("global-month-filter");
+        if (monthSelect) monthSelect.value = urlMonth;
       }
 
       render(allPlans);
@@ -140,6 +150,63 @@
     if (p.mgmtScope === "Yes") return "mgmt";
     if (p.dataScope === "Yes") return "data";
     return "mgmt"; // default bucket
+  }
+
+  // ── Generate external package feed link ────────────────────
+  function getPackageFeedUrl(lang, packageName, version, plan) {
+    if (!packageName) return "";
+    switch (lang) {
+      case ".NET":
+        return version
+          ? `https://www.nuget.org/packages/${encodeURIComponent(packageName)}/${encodeURIComponent(version)}`
+          : `https://www.nuget.org/packages/${encodeURIComponent(packageName)}`;
+      case "Python":
+        return version
+          ? `https://pypi.org/project/${encodeURIComponent(packageName)}/${encodeURIComponent(version)}`
+          : `https://pypi.org/project/${encodeURIComponent(packageName)}`;
+      case "JavaScript":
+        return version
+          ? `https://www.npmjs.com/package/${encodeURIComponent(packageName)}/v/${encodeURIComponent(version)}`
+          : `https://www.npmjs.com/package/${encodeURIComponent(packageName)}`;
+      case "Java": {
+        let groupName, artifactName;
+        if (packageName.includes(":")) {
+          const parts = packageName.split(":");
+          groupName = parts[0];
+          artifactName = parts[1];
+        } else {
+          artifactName = packageName;
+          groupName = classifyPlane(plan) === "mgmt" ? "com.azure.resourcemanager" : "com.azure";
+        }
+        return version
+          ? `https://central.sonatype.com/artifact/${encodeURIComponent(groupName)}/${encodeURIComponent(artifactName)}/${encodeURIComponent(version)}`
+          : `https://central.sonatype.com/artifact/${encodeURIComponent(groupName)}/${encodeURIComponent(artifactName)}`;
+      }
+      case "Go":
+        return version
+          ? `https://github.com/Azure/azure-sdk-for-go/tree/${encodeURIComponent(packageName)}/v${encodeURIComponent(version)}/${encodeURIComponent(packageName)}`
+          : `https://github.com/Azure/azure-sdk-for-go/tree/main/${encodeURIComponent(packageName)}`;
+      default:
+        return "";
+    }
+  }
+
+  // Feed name and icon for each language's package registry
+  function getPackageFeedInfo(lang) {
+    switch (lang) {
+      case ".NET":
+        return { name: "NuGet", icon: '<svg class="feed-icon" viewBox="0 0 512 512" width="14" height="14"><circle cx="145" cy="367" r="105" fill="#004880"/><circle cx="371" cy="371" r="105" fill="#004880"/><circle cx="256" cy="145" r="73" fill="#004880"/></svg>' };
+      case "Python":
+        return { name: "PyPI", icon: '<svg class="feed-icon" viewBox="0 0 512 512" width="14" height="14"><path d="M254 1c-28 0-53 3-74 10-62 19-73 59-73 87v64h147v21H107C62 183 23 212 10 268c-15 64-16 104 0 171 12 49 40 85 88 85h57v-77c0-50 43-94 93-94h146c45 0 81-37 81-82V128c0-44-37-76-81-84-28-5-58-8-86-8h-54zm-82 50c17 0 30 14 30 31s-13 30-30 30c-17 0-31-13-31-30s14-31 31-31z" fill="#366994"/><path d="M393 183v75c0 52-44 96-93 96H154c-44 0-81 38-81 82v154c0 44 53 70 93 82 48 14 94 17 147 0 35-11 68-33 68-82V461H237v-21h215c47 0 64-33 81-82 18-51 17-99 0-171-12-52-35-82-81-82h-59v74zm-55 278c17 0 31 14 31 31s-14 30-31 30-30-13-30-30 13-31 30-31z" fill="#ffc331"/></svg>' };
+      case "JavaScript":
+        return { name: "npm", icon: '<svg class="feed-icon" viewBox="0 0 512 512" width="14" height="14"><rect width="512" height="512" fill="#cb3837" rx="50"/><path d="M227 327V185h57v142h57V128H100v256h127v-57z" fill="#fff"/></svg>' };
+      case "Java":
+        return { name: "Maven", icon: '<svg class="feed-icon" viewBox="0 0 512 512" width="14" height="14"><rect width="512" height="512" fill="#c71a36" rx="50"/><text x="256" y="350" text-anchor="middle" fill="#fff" font-size="200" font-family="serif" font-weight="bold">M</text></svg>' };
+      case "Go":
+        return { name: "GitHub", icon: '<svg class="feed-icon" viewBox="0 0 16 16" width="14" height="14"><path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" fill="#333"/></svg>' };
+      default:
+        return { name: "Package", icon: "📦" };
+    }
   }
 
   // A language is excluded only when ReleaseExclusionStatus is Approved or Requested
@@ -314,23 +381,75 @@
     return (document.getElementById("global-plane-filter") || {}).value || "";
   }
 
+  // Populate the month filter dropdown with available release months
+  function populateMonthFilter(plans) {
+    const monthSet = new Set();
+    for (const p of plans) {
+      if (p.releaseMonth) monthSet.add(p.releaseMonth);
+    }
+    // Sort months chronologically
+    const months = [...monthSet].sort((a, b) => parseReleaseMonth(a) - parseReleaseMonth(b));
+    const select = document.getElementById("global-month-filter");
+    if (!select) return;
+    const currentValue = select.value;
+    // Keep the "All Months" option, replace the rest
+    select.innerHTML = '<option value="">All Months</option>';
+    for (const m of months) {
+      const opt = document.createElement("option");
+      opt.value = m;
+      opt.textContent = m;
+      select.appendChild(opt);
+    }
+    // Restore selection if it still exists
+    if (currentValue && months.includes(currentValue)) select.value = currentValue;
+  }
+
+  // Update URL parameters to reflect current filter state (for sharing)
+  function syncFiltersToUrl() {
+    const params = new URLSearchParams(window.location.search);
+    const filter = ($("#search-box").value || "").trim();
+    const month = getMonthFilter();
+
+    if (filter) params.set("filter", filter); else params.delete("filter");
+    if (month) params.set("month", month); else params.delete("month");
+
+    const newUrl = params.toString() ? `${window.location.pathname}?${params}` : window.location.pathname;
+    window.history.replaceState(null, "", newUrl);
+  }
+
   // ── Render ──────────────────────────────────────────────────
+  function matchesFilter(p, filter) {
+    if (p.title.toLowerCase().includes(filter)) return true;
+    if ((p.productName || "").toLowerCase().includes(filter)) return true;
+    if ((p.serviceName || "").toLowerCase().includes(filter)) return true;
+    if ((p.ownerPM || "").toLowerCase().includes(filter)) return true;
+    if ((p.submittedBy || "").toLowerCase().includes(filter)) return true;
+    if (String(p.releasePlanId || "").toLowerCase().includes(filter)) return true;
+    // Spec project path / TypeSpec path
+    if ((p.typeSpecPath || "").toLowerCase().includes(filter)) return true;
+    // Spec PR URL or PR number
+    if (p.apiSpec && p.apiSpec.specPrUrl && p.apiSpec.specPrUrl.toLowerCase().includes(filter)) return true;
+    // Package names across all languages
+    const langs = p.languages || {};
+    for (const lang of Object.keys(langs)) {
+      if ((langs[lang].packageName || "").toLowerCase().includes(filter)) return true;
+      if ((langs[lang].sdkPrUrl || "").toLowerCase().includes(filter)) return true;
+    }
+    return false;
+  }
+
+  function getMonthFilter() {
+    return (document.getElementById("global-month-filter") || {}).value || "";
+  }
+
   function render(plans) {
     detectDuplicates(plans);
     const planeFilter = getGlobalPlaneFilter();
+    const monthFilter = getMonthFilter();
     const filter = ($("#search-box").value || "").toLowerCase();
-    let filtered = filter
-      ? plans.filter(
-          (p) =>
-            p.title.toLowerCase().includes(filter) ||
-            (p.productName || "").toLowerCase().includes(filter) ||
-            (p.serviceName || "").toLowerCase().includes(filter) ||
-            (p.ownerPM || "").toLowerCase().includes(filter) ||
-            (p.submittedBy || "").toLowerCase().includes(filter) ||
-            String(p.releasePlanId || "").toLowerCase().includes(filter)
-        )
-      : plans;
+    let filtered = filter ? plans.filter(p => matchesFilter(p, filter)) : plans;
     if (planeFilter) filtered = filtered.filter(p => classifyPlane(p) === planeFilter);
+    if (monthFilter) filtered = filtered.filter(p => (p.releaseMonth || "").toLowerCase() === monthFilter.toLowerCase());
 
     const mgmt = filtered.filter((p) => classifyPlane(p) === "mgmt");
     const data = filtered.filter((p) => classifyPlane(p) === "data");
@@ -338,7 +457,7 @@
     // Detect if filtering is active (needed by splitByState)
     const params = new URLSearchParams(window.location.search);
     const singlePlan = params.get("releasePlan") || params.get("releaseplan");
-    const isFiltering = !!(filter || singlePlan);
+    const isFiltering = !!(filter || singlePlan || monthFilter);
 
     function sortByReleaseMonth(a, b) {
       return parseReleaseMonth(a.releaseMonth) - parseReleaseMonth(b.releaseMonth);
@@ -472,8 +591,13 @@
   }
 
   function attachCardHandlers(container, plans) {
+    // Normalize: if container is itself a .plan-card (single card refresh), query from it directly
+    const cards = container.classList && container.classList.contains("plan-card")
+      ? [container]
+      : [...container.querySelectorAll(".plan-card")];
+
     // Store plan data references on cards for step recomputation
-    container.querySelectorAll(".plan-card").forEach((cardEl) => {
+    cards.forEach((cardEl) => {
       const planId = parseInt(cardEl.dataset.planId, 10);
       const plan = plans.find(p => p.id === planId);
       if (plan) cardEl._planData = plan;
@@ -628,7 +752,8 @@
     return "";
   }
 
-  function cardHTML(p) {
+  function cardHTML(p, options) {
+    const showPmAction = !!(options && options.showPmAction && currentUserIsPM);
     const pastDue = isPastDue(p);
     const cardClass = pastDue ? "plan-card past-due" : "plan-card";
     const step = computeCurrentStep(p);
@@ -648,7 +773,7 @@
     const stepHTML = (step.status && !isTerminal)
       ? `<span class="step-badge ${step.statusClass}">${esc(step.status)}</span>`
       : "";
-    const actionHTML = (step.action && !isTerminal && !p._pmAction)
+    const actionHTML = (step.action && !isTerminal && !(showPmAction && p._pmAction))
       ? `<span class="action-badge">Action required from: ${esc(step.action)}</span>`
       : "";
     const dupHTML = p._duplicateOf
@@ -671,7 +796,7 @@
         <button class="plan-share-btn" data-plan-id="${p.releasePlanId || p.id}" title="Share this release plan">&#x1F517;</button>
         <button class="plan-refresh-btn" data-plan-id="${p.id}" title="Refresh this release plan">&#x21bb;</button>
       </div>
-      <div class="card-details">${detailHTML(p)}</div>
+      <div class="card-details">${detailHTML(p, { showPmAction })}</div>
     </div>`;
   }
 
@@ -711,12 +836,14 @@
       "fix-checks": "🔧 Fix Checks",
       "release": "🚀 Release",
       "merge": "✅ Merge PR",
+      "link-pr": "🔗 Link PR",
     };
     const classes = {
       "generate": "action-btn-generate",
       "fix-checks": "action-btn-fix",
       "release": "action-btn-release",
       "merge": "action-btn-merge",
+      "link-pr": "action-btn-link",
     };
     return `<button class="lang-action-btn ${classes[type] || ""}" ${attrs}>${labels[type] || type}</button>`;
   }
@@ -767,6 +894,22 @@
         body = `<p>The SDK pull request for <strong>${esc(lang)}</strong>${pkg ? ` package <code>${esc(pkg)}</code>` : ""} is approved and all checks are passing. It is ready to be merged.</p>
           <p><a href="${esc(prUrl)}" target="_blank" rel="noopener">Open the PR on GitHub</a> and merge it, or use the ${agentLink}:</p>
           <div class="guide-prompt"><code>Merge ${esc(lang)} SDK pull request ${esc(prUrl)}</code></div>`;
+        break;
+      case "link-pr":
+        title = `Link SDK PR — ${lang}${pkg ? ` (${pkg})` : ""}`;
+        body = `<p>The SDK pull request for <strong>${esc(lang)}</strong>${pkg ? ` package <code>${esc(pkg)}</code>` : ""} is <strong>closed</strong> without being merged.</p>
+          <p><strong>Steps:</strong></p>
+          <ol>
+            <li>Check if a different/replacement PR has been created for this package in the SDK repository.</li>
+            <li>If a new PR exists, link it to this release plan using the ${agentLink}.</li>
+            <li>If no new PR exists, generate a new SDK PR using the agent.</li>
+          </ol>
+          <p><strong>To link an existing PR:</strong></p>
+          ${repoNote}
+          <div class="guide-prompt"><code>Link ${esc(lang)} SDK pull request &lt;PR URL&gt; to release plan ${esc(planId)}</code></div>
+          <p style="font-size:.82rem;color:#605e5c;margin-top:8px;">Replace <code>&lt;PR URL&gt;</code> with the URL of the correct ${esc(lang)} SDK pull request.</p>
+          <p><strong>To generate a new PR instead:</strong></p>
+          <div class="guide-prompt"><code>Generate ${esc(lang)} SDK${pkg ? ` for package ${esc(pkg)}` : ""} for release plan ${esc(planId)}</code></div>`;
         break;
     }
     return { title, body };
@@ -1093,7 +1236,8 @@
     return `<div class="stage-bar">${items}</div>`;
   }
 
-  function detailHTML(p) {
+  function detailHTML(p, options) {
+    const showPmAction = !!(options && options.showPmAction);
     const specPath = p.specProjectPath || p.typeSpecPath || "";
     const step = computeCurrentStep(p);
     let html = stageBarHTML(p);
@@ -1105,7 +1249,7 @@
       html += `<div class="detail-row detail-step-highlight">
         <strong>Current stage:</strong> <span class="step-badge ${step.statusClass}">${esc(step.status)}</span>`;
       if (step.action) {
-        if (!p._pmAction) {
+        if (!(showPmAction && p._pmAction)) {
           html += ` <strong>Action required from:</strong> <span class="action-badge">${esc(step.action)}</span>`;
         }
       }
@@ -1129,7 +1273,7 @@
     if (p.createdDate) metaItems.push(`<span><strong>Created On:</strong> ${shortDate(p.createdDate)}</span>`);
     if (p.lastActivity) metaItems.push(`<span><strong>Last Activity:</strong> ${shortDate(p.lastActivity)}</span>`);
     if (metaItems.length) html += `<div class="detail-meta-row">${metaItems.join("")}</div>`;
-    if (p._pmAction) html += `<div class="pm-action"><strong>Possible PM action:</strong> ${p._pmAction}</div>`;
+    if (showPmAction && p._pmAction) html += `<div class="pm-action"><strong>Possible PM action:</strong> ${p._pmAction}</div>`;
     html += "</div>";
 
     // Expandable Product Details section
@@ -1169,7 +1313,7 @@
         <div class="sdk-details-content" style="${sdkDisplay}">
         <table class="sdk-table"><thead><tr>
           <th>Language</th><th>Package</th><th>SDK PR</th><th>PR Status</th>
-          <th>APIView</th><th>Release Status</th><th>Action Required</th>
+          <th>APIView</th><th>Release Status</th><th>Version</th><th>Package Link</th><th>Action Required</th>
         </tr></thead><tbody>`;
         for (const lang of langKeys) {
           const l = langs[lang];
@@ -1183,12 +1327,12 @@
           let releaseDisplay = l.releaseStatus || "";
           if (exLabel) releaseDisplay = exLabel.text;
 
-          // Package labels: version (hide if released) + namespace approval + new package + API review
+          // Determine display version: use releasedVersion when released, pkgVersion otherwise
+          const isReleased = (l.releaseStatus || "").toLowerCase() === "released";
+          const displayVersion = isReleased ? (l.releasedVersion || "") : (l.pkgVersion || "");
+
+          // Package labels: namespace approval + new package + API review (version now in its own column)
           let pkgLabels = "";
-          const isReleased = (l.releaseStatus || "").toLowerCase().includes("released");
-          if (l.pkgVersion && !isReleased) {
-            pkgLabels += `<span class="pr-label pr-label-version">${esc(l.pkgVersion)}</span>`;
-          }
           if (l.isNewPackage) {
             pkgLabels += '<span class="pr-label pr-label-new">New</span>';
             if (classifyPlane(p) !== "mgmt" && l.namespaceApproval && l.namespaceApproval.toLowerCase() !== "approved") {
@@ -1219,12 +1363,15 @@
             const hasPr = !!l.sdkPrUrl;
             const isMerged = prSt.includes("merged") || prSt === "completed";
             const isOpen = prSt === "open" || prSt === "draft";
+            const isClosed = prSt === "closed";
             const hasFailedChecks = l.prDetails && l.prDetails.failedChecks && l.prDetails.failedChecks.length > 0;
             const isApproved = l.prDetails && l.prDetails.isApproved;
             const isMergeable = l.prDetails && l.prDetails.mergeable && l.prDetails.mergeableState === "clean";
 
             if (!hasPr) {
               actionCell = langActionBtn("generate", lang, p, l);
+            } else if (isClosed && !isMerged) {
+              actionCell = langActionBtn("link-pr", lang, p, l);
             } else if (isOpen && hasFailedChecks) {
               actionCell = langActionBtn("fix-checks", lang, p, l);
             } else if (isMerged && !relSt.includes("released")) {
@@ -1234,6 +1381,14 @@
             }
           }
 
+          // Package feed link with icon and label — only show when released
+          const feedUrl = isReleased ? getPackageFeedUrl(lang, l.packageName, displayVersion, p) : "";
+          let feedLinkCell = "—";
+          if (feedUrl) {
+            const feedInfo = getPackageFeedInfo(lang);
+            feedLinkCell = `<a href="${esc(feedUrl)}" target="_blank" rel="noopener" title="View on ${feedInfo.name}">${feedInfo.icon} ${feedInfo.name}</a>`;
+          }
+
           html += `<tr${rowClass}>
             <td><strong>${esc(lang)}</strong></td>
             <td>${esc(l.packageName) || "—"} ${pkgLabels}</td>
@@ -1241,6 +1396,8 @@
             <td>${l.sdkPrUrl ? statusSpan(l.sdkPrGitHubStatus || l.prStatus) : ""}</td>
             <td class="apiview-cell">${apiViewCell}</td>
             <td>${statusSpan(releaseDisplay)}</td>
+            <td>${displayVersion ? esc(displayVersion) : (isReleased ? '<span class="version-na">Not available</span>' : "—")}</td>
+            <td>${feedLinkCell}</td>
             <td class="action-cell">${actionCell}</td>
           </tr>`;
         }
@@ -1280,8 +1437,8 @@
       }
     }
 
-    // Action Required guidance (hidden in PM view, replaced by PM action)
-    if (!p._pmAction) {
+    // Action Required guidance (hidden in PM tab view, replaced by PM action)
+    if (!(showPmAction && p._pmAction)) {
       html += actionRequiredHTML(p);
     }
 
@@ -1358,7 +1515,11 @@
           }
           if (labels) {
             const prTd = link.closest("td");
-            if (prTd) prTd.insertAdjacentHTML("beforeend", " " + labels);
+            if (prTd) {
+              // Remove any existing pr-labels to avoid duplicates (initial render may have added them)
+              prTd.querySelectorAll(".pr-label").forEach(el => el.remove());
+              prTd.insertAdjacentHTML("beforeend", " " + labels);
+            }
           }
         }
 
@@ -1391,7 +1552,8 @@
         });
 
         const oldAction = detailsEl.querySelector(".action-required-section");
-        if (plan._pmAction) {
+        const isInPmTab = currentUserIsPM && !!(cardEl && cardEl.closest("#tab-pm-view"));
+        if (isInPmTab && plan._pmAction) {
           if (oldAction) oldAction.remove();
         } else {
           const newActionHTML = actionRequiredHTML(plan);
@@ -1509,7 +1671,7 @@
   function updateTimestamp(iso) {
     if (!iso) return;
     const d = new Date(iso);
-    $("#last-updated").textContent = "Updated " + d.toLocaleTimeString();
+    $("#last-updated").textContent = "Last refreshed " + d.toLocaleTimeString();
   }
 
   // ── Countdown ───────────────────────────────────────────────
@@ -1518,9 +1680,6 @@
     if (countdownTimer) clearInterval(countdownTimer);
     countdownTimer = setInterval(() => {
       refreshCountdown--;
-      const m = Math.floor(refreshCountdown / 60);
-      const s = refreshCountdown % 60;
-      $("#refresh-timer").textContent = `Next refresh ${m}:${String(s).padStart(2, "0")}`;
       if (refreshCountdown <= 0) {
         fetchPlans();
       }
@@ -1597,6 +1756,7 @@
       render(allPlans);
       if (currentUserIsPM) renderPMView(allPlans);
       renderFilteredPRs();
+      syncFiltersToUrl();
       // If filter looks like a plan ID and no results found locally, try server lookup
       const filter = ($("#search-box").value || "").trim();
       if (/^\d+$/.test(filter)) {
@@ -1625,6 +1785,15 @@
     render(allPlans);
     if (currentUserIsPM) renderPMView(allPlans);
     renderFilteredPRs();
+    syncFiltersToUrl();
+  });
+
+  // Global month filter — re-renders all tabs
+  document.getElementById("global-month-filter").addEventListener("change", () => {
+    render(allPlans);
+    if (currentUserIsPM) renderPMView(allPlans);
+    renderFilteredPRs();
+    syncFiltersToUrl();
   });
 
   // ══════════════════════════════════════════════════════════════
@@ -1684,7 +1853,9 @@
 
   function renderPMView(plans) {
     const planeFilter = getGlobalPlaneFilter();
-    const filtered = planeFilter ? plans.filter(p => classifyPlane(p) === planeFilter) : plans;
+    const monthFilter = getMonthFilter();
+    let filtered = planeFilter ? plans.filter(p => classifyPlane(p) === planeFilter) : plans;
+    if (monthFilter) filtered = filtered.filter(p => (p.releaseMonth || "").toLowerCase() === monthFilter.toLowerCase());
 
     const inactive = [];
     const tier1Missing = [];
@@ -1789,7 +1960,7 @@
       el.innerHTML = '<div class="empty-msg">None found ✓</div>';
       return;
     }
-    el.innerHTML = plans.map(cardHTML).join("");
+    el.innerHTML = plans.map(p => cardHTML(p, { showPmAction: true })).join("");
     attachCardHandlers(el, plans);
   }
 

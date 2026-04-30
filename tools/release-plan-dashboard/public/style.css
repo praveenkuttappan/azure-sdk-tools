@@ -42,7 +42,7 @@ header h1 { font-size: 1.25rem; font-weight: 600; }
   font-size: .9rem;
   width: 280px;
 }
-.global-plane-filter {
+.global-plane-filter, .global-month-filter {
   padding: 5px 10px;
   border: 1px solid #d2d0ce;
   border-radius: var(--radius);
@@ -62,6 +62,9 @@ header h1 { font-size: 1.25rem; font-weight: 600; }
 }
 #refresh-btn:hover { background: #003560; }
 .meta-text { font-size: .8rem; opacity: .85; }
+.header-meta { display: flex; flex-direction: column; gap: 2px; margin-top: 2px; }
+.short-link { font-size: .8rem; color: #e0e0e0; }
+.short-link a { color: #ffd966; text-decoration: underline; }
 
 /* Stats bar */
 .stats-bar {
@@ -606,6 +609,10 @@ main { padding: 16px 24px 40px; max-width: 1600px; margin: 0 auto; }
 .action-btn-fix { background: #fff4ce; color: #8a6d3b; }
 .action-btn-release { background: var(--green-bg); color: var(--green); }
 .action-btn-merge { background: #e6f7ff; color: #0078d4; }
+.action-btn-link { background: #fff0f0; color: #c41e3a; }
+
+/* Feed link icons */
+.feed-icon { vertical-align: middle; margin-right: 3px; }
 
 /* PM View tab */
 #tab-pm-view { padding: 16px 24px 40px; max-width: 1600px; margin: 0 auto; }

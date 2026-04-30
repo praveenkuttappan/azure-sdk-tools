@@ -10,12 +10,14 @@
   <header>
     <div class="header-left">
       <h1>Azure SDK Release Plan Dashboard</h1>
-      <span id="last-updated" class="meta-text"></span>
+      <div class="header-meta">
+        <span class="short-link">Short link: <a href="https://aka.ms/azsdk/releaseplan-dashboard">https://aka.ms/azsdk/releaseplan-dashboard</a></span>
+        <span id="last-updated" class="meta-text"></span>
+      </div>
     </div>
     <div class="header-right">
       <span id="user-info" class="user-info"></span>
-      <input type="text" id="search-box" placeholder="Filter by title, service, owner…" />
-      <span id="refresh-timer" class="meta-text"></span>
+      <input type="text" id="search-box" placeholder="Filter by title, service, owner, package, spec PR#…" />
     </div>
   </header>
 
@@ -45,6 +47,9 @@
       <option value="">All Planes</option>
       <option value="mgmt">Management Plane</option>
       <option value="data">Data Plane</option>
+    </select>
+    <select id="global-month-filter" class="global-month-filter">
+      <option value="">All Months</option>
     </select>
   </div>
 

@@ -6,12 +6,20 @@
   "scripts": {
     "fetch": "node fetch-data.js",
     "start": "node server.js",
-    "refresh": "node fetch-data.js && node server.js"
+    "refresh": "node fetch-data.js && node server.js",
+    "test": "jest --forceExit"
   },
   "dependencies": {
     "@azure/identity": "^4.5.0",
     "@azure/keyvault-keys": "^4.9.0",
     "express": "^4.21.0",
     "express-session": "^1.19.0"
+  },
+  "devDependencies": {
+    "jest": "^30.3.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": ["**/tests/**/*.test.js"]
   }
 }
