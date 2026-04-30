@@ -837,6 +837,7 @@
       "release": "🚀 Release",
       "merge": "✅ Merge PR",
       "link-pr": "🔗 Link PR",
+      "mark-ready": "📋 Mark Ready",
     };
     const classes = {
       "generate": "action-btn-generate",
@@ -844,6 +845,7 @@
       "release": "action-btn-release",
       "merge": "action-btn-merge",
       "link-pr": "action-btn-link",
+      "mark-ready": "action-btn-ready",
     };
     return `<button class="lang-action-btn ${classes[type] || ""}" ${attrs}>${labels[type] || type}</button>`;
   }
@@ -910,6 +912,16 @@
           <p style="font-size:.82rem;color:#605e5c;margin-top:8px;">Replace <code>&lt;PR URL&gt;</code> with the URL of the correct ${esc(lang)} SDK pull request.</p>
           <p><strong>To generate a new PR instead:</strong></p>
           <div class="guide-prompt"><code>Generate ${esc(lang)} SDK${pkg ? ` for package ${esc(pkg)}` : ""} for release plan ${esc(planId)}</code></div>`;
+        break;
+      case "mark-ready":
+        title = `Mark PR Ready for Review — ${lang}${pkg ? ` (${pkg})` : ""}`;
+        body = `<p>The SDK pull request for <strong>${esc(lang)}</strong>${pkg ? ` package <code>${esc(pkg)}</code>` : ""} is currently in <strong>draft</strong> status. It needs to be marked as ready for review so that the SDK team can review and merge it.</p>
+          <p><strong>Steps:</strong></p>
+          <ol>
+            <li>Open the SDK pull request: <a href="${esc(prUrl)}" target="_blank" rel="noopener">${esc(prUrl)}</a></li>
+            <li>Click the <strong>"Ready for review"</strong> button to mark the pull request as ready for review.</li>
+          </ol>
+          <p style="font-size:.82rem;color:#605e5c;margin-top:8px;">Once marked ready, the SDK team will review the PR and provide feedback or approve it.</p>`;
         break;
     }
     return { title, body };
@@ -1362,7 +1374,8 @@
             const relSt = (l.releaseStatus || "").toLowerCase();
             const hasPr = !!l.sdkPrUrl;
             const isMerged = prSt.includes("merged") || prSt === "completed";
-            const isOpen = prSt === "open" || prSt === "draft";
+            const isDraft = prSt === "draft";
+            const isOpen = prSt === "open" || isDraft;
             const isClosed = prSt === "closed";
             const hasFailedChecks = l.prDetails && l.prDetails.failedChecks && l.prDetails.failedChecks.length > 0;
             const isApproved = l.prDetails && l.prDetails.isApproved;
@@ -1372,6 +1385,8 @@
               actionCell = langActionBtn("generate", lang, p, l);
             } else if (isClosed && !isMerged) {
               actionCell = langActionBtn("link-pr", lang, p, l);
+            } else if (isDraft && !relSt.includes("released")) {
+              actionCell = langActionBtn("mark-ready", lang, p, l);
             } else if (isOpen && hasFailedChecks) {
               actionCell = langActionBtn("fix-checks", lang, p, l);
             } else if (isMerged && !relSt.includes("released")) {

@@ -323,7 +323,8 @@ describe("closed PR action logic", () => {
     const relSt = (l.releaseStatus || "").toLowerCase();
     const hasPr = !!l.sdkPrUrl;
     const isMerged = prSt.includes("merged") || prSt === "completed";
-    const isOpen = prSt === "open" || prSt === "draft";
+    const isDraft = prSt === "draft";
+    const isOpen = prSt === "open" || isDraft;
     const isClosed = prSt === "closed";
     const hasFailedChecks = l.prDetails && l.prDetails.failedChecks && l.prDetails.failedChecks.length > 0;
     const isApproved = l.prDetails && l.prDetails.isApproved;
@@ -331,6 +332,7 @@ describe("closed PR action logic", () => {
 
     if (!hasPr) return "generate";
     if (isClosed && !isMerged) return "link-pr";
+    if (isDraft && !relSt.includes("released")) return "mark-ready";
     if (isOpen && hasFailedChecks) return "fix-checks";
     if (isMerged && !relSt.includes("released")) return "release";
     if (isOpen && isApproved && isMergeable) return "merge";
@@ -427,6 +429,37 @@ describe("closed PR action logic", () => {
       prDetails: { failedChecks: ["Some check"] },
     });
     expect(action).toBe("link-pr");
+  });
+
+  test("returns mark-ready when PR is in draft status and not released", () => {
+    const action = determineAction({
+      sdkPrUrl: "https://github.com/Azure/azure-sdk-for-python/pull/45261",
+      sdkPrGitHubStatus: "draft",
+      prStatus: "draft",
+      releaseStatus: "",
+    });
+    expect(action).toBe("mark-ready");
+  });
+
+  test("mark-ready takes priority over fix-checks for draft PRs", () => {
+    const action = determineAction({
+      sdkPrUrl: "https://github.com/Azure/azure-sdk-for-python/pull/45261",
+      sdkPrGitHubStatus: "draft",
+      prStatus: "draft",
+      releaseStatus: "",
+      prDetails: { failedChecks: ["Some check"] },
+    });
+    expect(action).toBe("mark-ready");
+  });
+
+  test("does not return mark-ready when draft but already released", () => {
+    const action = determineAction({
+      sdkPrUrl: "https://github.com/Azure/azure-sdk-for-python/pull/45261",
+      sdkPrGitHubStatus: "draft",
+      prStatus: "draft",
+      releaseStatus: "Released",
+    });
+    expect(action).toBeNull();
   });
 });
 

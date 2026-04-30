@@ -610,6 +610,7 @@ main { padding: 16px 24px 40px; max-width: 1600px; margin: 0 auto; }
 .action-btn-release { background: var(--green-bg); color: var(--green); }
 .action-btn-merge { background: #e6f7ff; color: #0078d4; }
 .action-btn-link { background: #fff0f0; color: #c41e3a; }
+.action-btn-ready { background: #fff8e1; color: #7b6000; }
 
 /* Feed link icons */
 .feed-icon { vertical-align: middle; margin-right: 3px; }
