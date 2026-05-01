@@ -191,7 +191,7 @@ router.get("/api/release-plans", async (req, res) => {
           AND [System.WorkItemType] = 'Release Plan'
           AND [Custom.ReleasePlanID] = '${filterPlanId}'`;
       const ids = await runWiql(wiqlQuery);
-      if (!ids.length) return res.json({ plans: [], fetchedAt: new Date().toISOString() });
+      if (!ids.length) return res.json({ plans: [], notFound: filterPlanId, fetchedAt: new Date().toISOString() });
       const workItems = await fetchWorkItemsBatch(ids);
       const allChildIds = [];
       for (const wi of workItems) allChildIds.push(...extractChildIds(wi));

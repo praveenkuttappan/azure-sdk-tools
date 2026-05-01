@@ -94,6 +94,13 @@ describe("API routes", () => {
       expect(res.body).toHaveProperty("plans");
       expect(res.body).toHaveProperty("fetchedAt");
     });
+
+    test("returns notFound when filtering by non-existent plan ID", async () => {
+      const res = await httpRequest("GET", "/api/release-plans?releasePlan=99999");
+      expect(res.status).toBe(200);
+      expect(res.body.plans).toEqual([]);
+      expect(res.body.notFound).toBe("99999");
+    });
   });
 
   describe("POST /api/pr-statuses", () => {

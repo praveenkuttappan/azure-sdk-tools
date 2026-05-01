@@ -88,6 +88,9 @@
   }
 
   // ── Load user info ────────────────────────────────────────────
+  // PM status is determined server-side only; client cannot grant itself PM access.
+  // Even if someone sets store().user.isPM = true via DevTools, renderPMView()
+  // guards on `currentUserIsPM` which is only set from the authenticated /auth/me response.
   let currentUserIsPM = false;
   async function loadUserInfo() {
     try {
@@ -133,6 +136,15 @@
         setTimeout(fetchPlans, 5000);
         return;
       }
+
+      // Release plan not found — show specific message
+      if (data.notFound) {
+        store().loading = false;
+        store().error = `Release plan #${data.notFound} was not found. It may have been deleted or the ID is incorrect.`;
+        store().showContent = false;
+        return;
+      }
+
       store().loading = false;
       allPlans = data.plans || [];
 
@@ -1900,6 +1912,9 @@
   }
 
   function renderPMView(plans) {
+    // Server-verified PM check — prevents rendering even if tab is unhidden via DevTools
+    if (!currentUserIsPM) return;
+
     const planeFilter = getGlobalPlaneFilter();
     const monthFilter = getMonthFilter();
     let filtered = planeFilter ? plans.filter(p => classifyPlane(p) === planeFilter) : plans;
