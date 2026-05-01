@@ -50,14 +50,15 @@ function _githubRequestWithAuth(authHeader, apiPath, _retryCount = 0) {
       });
     });
     req.on("error", (err) => { console.warn(`GitHub error ${apiPath}:`, err.message); resolve(null); });
+    req.setTimeout(30000, () => { req.destroy(); console.warn(`GitHub timeout ${apiPath}`); resolve(null); });
     req.end();
   });
 }
 
 function parseGitHubPrUrl(url) {
   if (!url) return null;
-  const m = url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
-  return m ? { owner: m[1], repo: m[2], number: m[3] } : null;
+  const m = url.match(/^https?:\/\/(www\.)?github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
+  return m ? { owner: m[2], repo: m[3], number: m[4] } : null;
 }
 
 function _extractPrStatus(data) {
