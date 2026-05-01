@@ -209,7 +209,7 @@
     }
   }
 
-  // A language is excluded only when ReleaseExclusionStatus is Approved or Requested
+  // A language is excluded only when ReleaseExclusionStatus is "Approved"
   function isLangExcluded(exclusionStatus) {
     const val = (exclusionStatus || "").toLowerCase().trim();
     return val === "approved";
@@ -793,8 +793,8 @@
           ${apiReadinessBadge(p)}
           ${pastDue ? '<span class="badge badge-pastdue">Past Due</span>' : ""}
         </div>
-        <button class="plan-share-btn" data-plan-id="${p.releasePlanId || p.id}" title="Share this release plan">&#x1F517;</button>
-        <button class="plan-refresh-btn" data-plan-id="${p.id}" title="Refresh this release plan">&#x21bb;</button>
+        <button class="plan-share-btn" data-plan-id="${esc(String(p.releasePlanId || p.id))}" title="Share this release plan">&#x1F517;</button>
+        <button class="plan-refresh-btn" data-plan-id="${esc(String(p.id))}" title="Refresh this release plan">&#x21bb;</button>
       </div>
       <div class="card-details">${detailHTML(p, { showPmAction })}</div>
     </div>`;

@@ -1,6 +1,7 @@
 "use strict";
 
 const https = require("https");
+const { DefaultAzureCredential } = require("@azure/identity");
 
 // ══════════════════════════════════════════════════════════════
 // ── Azure DevOps helpers ──────────────────────────────────────
@@ -10,6 +11,9 @@ const DEVOPS_ORG = "https://dev.azure.com/azure-sdk";
 const DEVOPS_PROJECT = "Release";
 const API_VERSION = "7.1";
 const BATCH_SIZE = 200;
+const DEVOPS_SCOPE = "499b84ac-1321-427f-aa17-267ca6975798/.default"; // Azure DevOps resource ID
+
+const credential = new DefaultAzureCredential();
 
 const LANGUAGES = ["Dotnet", "JavaScript", "Python", "Java", "Go"];
 const LANGUAGE_DISPLAY = {
@@ -46,18 +50,18 @@ const PACKAGE_FIELDS = [
   "Custom.PackageVersion", "Custom.APIReviewStatus", "Custom.PackageNameApprovalStatus",
 ];
 
-function getAuthHeader() {
-  const pat = process.env.DEVOPS_RELEASE_PLAN_PAT;
-  if (!pat) throw new Error("DEVOPS_RELEASE_PLAN_PAT is not set.");
-  return "Basic " + Buffer.from(":" + pat).toString("base64");
+async function getAuthHeader() {
+  const tokenResponse = await credential.getToken(DEVOPS_SCOPE);
+  return "Bearer " + tokenResponse.token;
 }
 
-function devopsRequest(urlPath, method, body) {
+async function devopsRequest(urlPath, method, body) {
+  const authHeader = await getAuthHeader();
   return new Promise((resolve, reject) => {
     const url = new URL(urlPath);
     const options = {
       hostname: url.hostname, path: url.pathname + url.search, method: method || "GET",
-      headers: { Authorization: getAuthHeader(), "Content-Type": "application/json", Accept: "application/json" },
+      headers: { Authorization: authHeader, "Content-Type": "application/json", Accept: "application/json" },
     };
     const req = https.request(options, (res) => {
       let data = "";

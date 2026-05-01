@@ -12,6 +12,7 @@
   --card-shadow: 0 1px 4px rgba(0,0,0,.12);
   --radius: 6px;
   --font: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+  --text: #323130;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }

@@ -88,8 +88,8 @@ A single-page web dashboard for viewing Azure SDK Release Plan work items from A
 
 ## Prerequisites
 
-- [Node.js](https://nodejs.org/) 18 or later
-- An Azure DevOps Personal Access Token (PAT) with read access to work items in the `azure-sdk` organization
+- [Node.js](https://nodejs.org/) 20 or later
+- A Managed Identity (or service principal) with read access to work items in the `azure-sdk` Azure DevOps organization
 - A GitHub App configured for OAuth and token signing
 - Azure Key Vault access for GitHub App JWT signing
 
@@ -105,7 +105,6 @@ All environment variables required by the application:
 | `GITHUB_INSTALL_OWNER` | GitHub organization where the App is installed | **Yes** |
 | `GITHUB_APP_CLIENT_ID` | GitHub OAuth App client ID | **Yes** |
 | `GITHUB_APP_CLIENT_SECRET` | GitHub OAuth App client secret | **Yes** |
-| `DEVOPS_RELEASE_PLAN_PAT` | Azure DevOps PAT for work item access | **Yes** |
 | `GITHUB_PAT_RELEASE_PLAN` | GitHub PAT for PR enrichment (fallback if App token fails) | No |
 | `SESSION_SECRET` | Express session secret (random generated if not set) | No |
 | `NODE_ENV` | Set to `production` for secure cookies | No |

@@ -60,7 +60,11 @@ function csrfProtection(req, res, next) {
   const origin = req.get("origin") || "";
   const referer = req.get("referer") || "";
   const host = req.get("host") || "";
-  if (origin && new URL(origin).host === host) return next();
+  if (origin) {
+    try {
+      if (new URL(origin).host === host) return next();
+    } catch { /* invalid origin */ }
+  }
   if (!origin && referer) {
     try { if (new URL(referer).host === host) return next(); } catch { /* invalid referer */ }
   }
@@ -131,11 +135,12 @@ app.get("/auth/logout", (req, res) => { req.session.destroy(() => res.redirect("
 
 app.get("/auth/me", (req, res) => {
   const user = req.session && req.session.user ? req.session.user : null;
+  let responseUser = user;
   if (user) {
     const pmList = (process.env.RELEASE_PLAN_DASHBOARD_PM_USERS || "").split(",").map(u => u.trim().toLowerCase()).filter(Boolean);
-    user.isPM = pmList.includes((user.login || "").toLowerCase());
+    responseUser = { ...user, isPM: pmList.includes((user.login || "").toLowerCase()) };
   }
-  res.json(user);
+  res.json(responseUser);
 });
 
 // ── Rate limiting for API endpoints ───────────────────────────
@@ -155,7 +160,6 @@ app.use(express.static(path.join(__dirname, "public")));
 app.listen(PORT, async () => {
   console.log(`Release Plan Dashboard running on http://localhost:${PORT}`);
   console.log(`GitHub OAuth enabled (orgs: ${REQUIRED_ORGS.join(", ")})`);
-  if (!process.env.DEVOPS_RELEASE_PLAN_PAT) console.warn("WARNING: DEVOPS_RELEASE_PLAN_PAT not set.");
 
   // Mint GitHub App token via Key Vault
   await mintGitHubAppToken();
