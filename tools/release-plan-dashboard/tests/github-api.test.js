@@ -1,4 +1,4 @@
-"use strict";
+import { describe, test, expect } from "vitest";
 
 // Set required env vars before import
 process.env.KEYVAULT_NAME = "test-vault";
@@ -6,7 +6,7 @@ process.env.KEYVAULT_KEY_NAME = "test-key";
 process.env.GITHUB_APP_NUMERIC_ID = "12345";
 process.env.GITHUB_INSTALL_OWNER = "TestOrg";
 
-const { parseGitHubPrUrl, throttledMap } = require("../lib/github-api");
+import { parseGitHubPrUrl, throttledMap } from "../lib/github-api.js";
 
 describe("github-api module", () => {
   describe("parseGitHubPrUrl", () => {

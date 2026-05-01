@@ -567,5 +567,3 @@ tools/sdk-ai-bots/azure-sdk-qa-bot-backend-shared/infra/azure.parameters.generat
 .artifacts/
 tools/tsp-client/test/examples/sdk/alternate-entrypoint/test-results.browser.xml
 
-# Release Plan Dashboard
-tools/release-plan-dashboard/node_modules/

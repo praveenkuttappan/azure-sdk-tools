@@ -66,7 +66,7 @@ A single-page web dashboard for viewing Azure SDK Release Plan work items from A
 │   ├── index.html         # Single-page HTML shell
 │   ├── app.js             # Client-side rendering, interaction, and action popups
 │   └── style.css          # Dashboard styles
-├── tests/                 # Jest unit tests (161+ tests)
+├── tests/                 # Vitest unit tests (161+ tests)
 ├── package.json
 └── .env.example           # Template for environment variables
 ```
@@ -88,7 +88,7 @@ A single-page web dashboard for viewing Azure SDK Release Plan work items from A
 
 ## Prerequisites
 
-- [Node.js](https://nodejs.org/) 20 or later
+- [Node.js](https://nodejs.org/) 22 or later
 - A Managed Identity (or service principal) with read access to work items in the `azure-sdk` Azure DevOps organization
 - A GitHub App configured for OAuth and token signing
 - Azure Key Vault access for GitHub App JWT signing
@@ -139,7 +139,7 @@ The server will **exit with an error** if any required variable is missing.
 
 ## Testing
 
-The project uses [Jest](https://jestjs.io/) for unit testing with 161+ test cases covering:
+The project uses [Vitest](https://vitest.dev/) for unit testing with 161+ test cases covering:
 - Cache eviction and TTL logic
 - Rate limiter (sliding window)
 - Authentication helpers
@@ -157,13 +157,13 @@ The project uses [Jest](https://jestjs.io/) for unit testing with 161+ test case
 npm test
 
 # Run a specific test file
-npx jest tests/package-feed.test.js
+npx vitest run tests/package-feed.test.js
 
 # Run tests with verbose output
-npx jest --verbose
+npx vitest run --reporter=verbose
 
 # Run tests matching a pattern
-npx jest --testPathPattern="github"
+npx vitest run --testPathPattern="github"
 ```
 
 ### Test Files
@@ -198,7 +198,7 @@ To set up a GitHub OAuth App:
    # Creates deploy.zip with server.js, package files, lib/, routes/, and public/
    # Compress source files (App Service runs npm install automatically via Oryx)
    ```
-2. Deploy to Azure App Service (Node.js 18+ runtime)
+2. Deploy to Azure App Service (Node.js 22+ runtime)
 3. Set all required environment variables in App Service → Configuration → Application settings
 4. The app runs `npm start` which launches `server.js`
 

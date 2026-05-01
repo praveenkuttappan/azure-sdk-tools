@@ -1,7 +1,5 @@
-"use strict";
-
-const https = require("https");
-const crypto = require("crypto");
+import https from "node:https";
+import crypto from "node:crypto";
 
 // ── GitHub App token minting via Azure Key Vault ──────────────
 const KEYVAULT_NAME = process.env.KEYVAULT_NAME;
@@ -10,17 +8,15 @@ const GITHUB_APP_ID = process.env.GITHUB_APP_NUMERIC_ID;
 const GITHUB_INSTALL_OWNER = process.env.GITHUB_INSTALL_OWNER;
 
 let _mintedGhToken = null;
-let _ghTokenMintedAt = 0;
 
 function base64UrlEncode(buffer) {
-  const b64 = (Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer)).toString("base64");
-  return b64.replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+  return (Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer)).toString("base64url");
 }
 
 async function mintGitHubAppToken() {
   try {
-    const { DefaultAzureCredential } = require("@azure/identity");
-    const { CryptographyClient, KeyClient } = require("@azure/keyvault-keys");
+    const { DefaultAzureCredential } = await import("@azure/identity");
+    const { CryptographyClient, KeyClient } = await import("@azure/keyvault-keys");
 
     const credential = new DefaultAzureCredential();
     const vaultUrl = `https://${KEYVAULT_NAME}.vault.azure.net`;
@@ -62,7 +58,6 @@ async function mintGitHubAppToken() {
     if (!tokenData.token) throw new Error("GitHub token exchange returned no token.");
 
     _mintedGhToken = tokenData.token;
-    _ghTokenMintedAt = Date.now();
     process.env.GH_TOKEN = _mintedGhToken;
     console.log(`GitHub App installation token minted successfully (owner: ${GITHUB_INSTALL_OWNER}).`);
     return _mintedGhToken;
@@ -141,7 +136,7 @@ function getBaseUrl(req) {
   return process.env.REDIRECT_URL || "https://releaseplan-dashboard.azurewebsites.net";
 }
 
-module.exports = {
+export {
   mintGitHubAppToken,
   exchangeCodeForToken,
   getGitHubUser,

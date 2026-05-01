@@ -1,5 +1,3 @@
-"use strict";
-
 const MAX_CACHE_ENTRIES = 5000;
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour for release plans + basic PR status
 const PR_DETAIL_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes for on-demand SDK PR details
@@ -18,4 +16,4 @@ function evictOldest(map) {
   for (const [key] of toRemove) map.delete(key);
 }
 
-module.exports = { cache, evictOldest, CACHE_TTL_MS, PR_DETAIL_CACHE_TTL_MS, MAX_CACHE_ENTRIES };
+export { cache, evictOldest, CACHE_TTL_MS, PR_DETAIL_CACHE_TTL_MS, MAX_CACHE_ENTRIES };

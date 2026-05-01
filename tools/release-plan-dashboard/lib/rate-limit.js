@@ -1,5 +1,3 @@
-"use strict";
-
 /**
  * Simple in-memory sliding-window rate limiter middleware.
  * Tracks request counts per session within a time window.
@@ -35,4 +33,4 @@ function createRateLimiter({ windowMs = 60 * 1000, maxRequests = 30 } = {}) {
   };
 }
 
-module.exports = { createRateLimiter };
+export { createRateLimiter };

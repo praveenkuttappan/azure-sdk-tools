@@ -1,6 +1,5 @@
-"use strict";
-
-const { createRateLimiter } = require("../lib/rate-limit");
+import { describe, test, expect, vi, beforeEach } from "vitest";
+import { createRateLimiter } from "../lib/rate-limit.js";
 
 function mockReq(user, ip) {
   return {
@@ -41,9 +40,7 @@ describe("rate-limit module", () => {
   test("blocks requests over the limit with 429", () => {
     const limiter = createRateLimiter({ windowMs: 60000, maxRequests: 3 });
     const req = mockReq("blockuser");
-    const next = jest.fn();
-
-    // Make 3 requests (should all pass)
+    const next = vi.fn();
     for (let i = 0; i < 3; i++) {
       const res = mockRes();
       limiter(req, res, next);
@@ -61,7 +58,7 @@ describe("rate-limit module", () => {
 
   test("uses user login as key when available", () => {
     const limiter = createRateLimiter({ windowMs: 60000, maxRequests: 2 });
-    const next = jest.fn();
+    const next = vi.fn();
 
     // Different users should have separate counters
     const req1 = mockReq("user1");
@@ -84,7 +81,7 @@ describe("rate-limit module", () => {
 
   test("falls back to IP when no session user", () => {
     const limiter = createRateLimiter({ windowMs: 60000, maxRequests: 2 });
-    const next = jest.fn();
+    const next = vi.fn();
 
     const req1 = mockReq(null, "10.0.0.1");
     const req2 = mockReq(null, "10.0.0.2");
@@ -100,10 +97,10 @@ describe("rate-limit module", () => {
   });
 
   test("sliding window expires old requests", () => {
-    jest.useFakeTimers();
+    vi.useFakeTimers();
     const limiter = createRateLimiter({ windowMs: 1000, maxRequests: 2 });
     const req = mockReq("timeruser");
-    const next = jest.fn();
+    const next = vi.fn();
 
     limiter(req, mockRes(), next);
     limiter(req, mockRes(), next);
@@ -114,13 +111,13 @@ describe("rate-limit module", () => {
     expect(next).toHaveBeenCalledTimes(2);
 
     // Advance time past window
-    jest.advanceTimersByTime(1100);
+    vi.advanceTimersByTime(1100);
 
     // Should be allowed again
     limiter(req, mockRes(), next);
     expect(next).toHaveBeenCalledTimes(3);
 
-    jest.useRealTimers();
+    vi.useRealTimers();
   });
 
   test("uses default options when none provided", () => {
@@ -128,7 +125,7 @@ describe("rate-limit module", () => {
     expect(typeof limiter).toBe("function");
 
     const req = mockReq("defaultuser");
-    const next = jest.fn();
+    const next = vi.fn();
     limiter(req, mockRes(), next);
     expect(next).toHaveBeenCalledTimes(1);
   });

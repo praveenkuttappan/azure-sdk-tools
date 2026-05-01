@@ -1,10 +1,10 @@
-"use strict";
+import { describe, test, expect } from "vitest";
 
 // Test DevOps API utility functions that don't require network
-const {
+import {
   LANGUAGES, LANGUAGE_DISPLAY, LANGUAGE_PACKAGE_WI,
   extractChildIds, getField, mapReleasePlan, isKnownPackage, isGAVersion,
-} = require("../lib/devops-api");
+} from "../lib/devops-api.js";
 
 describe("devops-api module", () => {
   describe("constants", () => {

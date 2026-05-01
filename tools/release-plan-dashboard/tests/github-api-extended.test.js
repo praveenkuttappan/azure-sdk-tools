@@ -1,4 +1,4 @@
-"use strict";
+import { describe, test, expect, beforeAll, afterAll } from "vitest";
 
 // Tests for the deriveSpecProjectPath function
 // This is an important utility that extracts TypeSpec paths from PR file lists
@@ -10,7 +10,7 @@ process.env.GITHUB_INSTALL_OWNER = "TestOrg";
 
 // We need to extract deriveSpecProjectPath — it's not exported, so we test via module internals
 // Actually let's check what's exported from github-api
-const githubApi = require("../lib/github-api");
+import * as githubApi from "../lib/github-api.js";
 
 // deriveSpecProjectPath is not exported, but it's used by batchFetchSpecProjectPaths.
 // Let's test it indirectly by importing the source and testing the logic.

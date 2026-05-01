@@ -5,6 +5,48 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Azure SDK Release Plan Dashboard</title>
   <link rel="stylesheet" href="style.css" />
+  <style>[x-cloak] { display: none !important; }</style>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <script>
+    document.addEventListener('alpine:init', () => {
+      Alpine.store('app', {
+        activeTab: 'tab-release-plans',
+        loading: true,
+        loadingMessage: 'Loading release plans\u2026',
+        error: '',
+        showContent: false,
+        showStatsBar: false,
+        stats: { total: 0, inprogress: 0, partial: 0, new: 0, finished: 0, mgmt: 0, data: 0 },
+        user: { name: '', isPM: false },
+        filters: { search: '', plane: '', month: '' },
+        prFilterVisible: false,
+
+        setTab(tab) {
+          this.activeTab = tab;
+          this.prFilterVisible = (tab === 'tab-sdk-prs');
+        },
+
+        // Modal state
+        showModal: false,
+        modalTitle: '',
+        modalBody: '',
+        _defaultModalTitle: '',
+        _defaultModalBody: '',
+
+        openModal(title, body) {
+          this.modalTitle = title || this._defaultModalTitle;
+          this.modalBody = body || this._defaultModalBody;
+          this.showModal = true;
+        },
+        closeModal() {
+          this.showModal = false;
+        },
+        openCreatePlanGuide() {
+          this.openModal(this._defaultModalTitle, this._defaultModalBody);
+        },
+      });
+    });
+  </script>
 </head>
 <body>
   <header>
@@ -15,19 +57,21 @@
         <span id="last-updated" class="meta-text"></span>
       </div>
     </div>
-    <div class="header-right">
-      <span id="user-info" class="user-info"></span>
-      <input type="text" id="search-box" placeholder="Filter by title, service, owner, package, spec PR#…" />
+    <div class="header-right" x-data>
+      <span id="user-info" class="user-info" x-show="$store.app.user.name">
+        <span class="user-name" x-text="$store.app.user.name"></span> <a href="/auth/logout" class="logout-link">Logout</a>
+      </span>
+      <input type="text" id="search-box" placeholder="Filter by title, service, owner, package, spec PR#…" x-model.debounce.250ms="$store.app.filters.search" />
     </div>
   </header>
 
-  <div class="tab-bar">
-    <button class="tab-btn active" data-tab="tab-release-plans">Release Plans</button>
-    <button class="tab-btn" data-tab="tab-sdk-prs">Review Required SDK Pull Requests</button>
-    <button class="tab-btn" data-tab="tab-pm-view" id="tab-btn-pm" style="display:none;">Attention Required</button>
+  <div class="tab-bar" x-data>
+    <button class="tab-btn" :class="{ active: $store.app.activeTab === 'tab-release-plans' }" @click="$store.app.setTab('tab-release-plans')">Release Plans</button>
+    <button class="tab-btn" :class="{ active: $store.app.activeTab === 'tab-sdk-prs' }" @click="$store.app.setTab('tab-sdk-prs')">Review Required SDK Pull Requests</button>
+    <button class="tab-btn" :class="{ active: $store.app.activeTab === 'tab-pm-view' }" @click="$store.app.setTab('tab-pm-view')" x-show="$store.app.user.isPM" x-cloak>Attention Required</button>
     <button id="btn-create-plan" class="btn-create-plan" title="How to create a release plan?">+ Create Release Plan</button>
     <div class="tab-bar-spacer"></div>
-    <div id="pr-tab-filters" class="tab-bar-filters" style="display:none;">
+    <div id="pr-tab-filters" class="tab-bar-filters" x-show="$store.app.prFilterVisible" x-cloak>
       <select id="pr-filter-lang">
         <option value="">All Languages</option>
         <option value=".NET">.NET</option>
@@ -43,72 +87,45 @@
       </select>
       <span id="pr-count" class="pr-count-label"></span>
     </div>
-    <select id="global-plane-filter" class="global-plane-filter">
+    <select id="global-plane-filter" class="global-plane-filter" x-model="$store.app.filters.plane">
       <option value="">All Planes</option>
       <option value="mgmt">Management Plane</option>
       <option value="data">Data Plane</option>
     </select>
-    <select id="global-month-filter" class="global-month-filter">
+    <select id="global-month-filter" class="global-month-filter" x-model="$store.app.filters.month">
       <option value="">All Months</option>
     </select>
   </div>
 
   <!-- Create Release Plan Guide Modal -->
-  <div id="create-plan-modal" class="modal-overlay" style="display:none;">
+  <div id="create-plan-modal" class="modal-overlay" x-data x-show="$store.app.showModal" x-cloak @click.self="$store.app.closeModal()" @keydown.escape.window="$store.app.closeModal()">
     <div class="modal-content">
       <div class="modal-header">
-        <h2>How to Create a Release Plan</h2>
-        <button id="modal-close" class="modal-close">&times;</button>
+        <h2 x-html="$store.app.modalTitle"></h2>
+        <button class="modal-close" @click="$store.app.closeModal()">&times;</button>
       </div>
-      <div class="modal-body">
-        <p>Release plans can be created using the <strong>Azure SDK Tools agent</strong> via <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">Copilot CLI</a> or <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">VS Code</a>.</p>
-
-        <h3>Step 1: Clone the API specs repo</h3>
-        <pre class="guide-code"><code>git clone https://github.com/Azure/azure-rest-api-specs.git</code></pre>
-        <p>Open Copilot CLI or VS Code from the repo root.</p>
-
-        <h3>Step 2: Collect the following details</h3>
-        <ol class="guide-list">
-          <li><strong>Relative path</strong> to your TypeSpec project<br>
-            <em>e.g. <code>specification/contosowidgetmanager/Contoso.Management</code></em></li>
-          <li><strong>SDK release type:</strong> beta or stable</li>
-          <li><strong>API spec pull request</strong> (optional)</li>
-          <li><strong>Service Tree ID</strong> for your service <em>(optional*)</em></li>
-          <li><strong>Service Tree ID</strong> for your product <em>(optional*)</em></li>
-        </ol>
-        <p style="font-size:.82rem;color:#605e5c;">* Service Tree IDs are only required if this is the first time creating a release plan for your TypeSpec project path. For subsequent plans, they will be auto-populated.</p>
-
-        <h3>Step 3: Use this prompt</h3>
-        <p>Copy and paste the following prompt into Copilot CLI or VS Code Copilot chat, filling in your details:</p>
-        <pre class="guide-prompt"><code>Create a release plan for TypeSpec project with following details:
-- TypeSpec project path: &lt;specification/your-service/Your.Management&gt;
-- SDK release type: &lt;beta or stable&gt;
-- API spec PR: &lt;optional PR link&gt;
-- Service Tree ID (Service): &lt;optional, your-service-tree-id&gt;
-- Service Tree ID (Product): &lt;optional, your-product-tree-id&gt;</code></pre>
-        <p style="font-size:.82rem;color:#605e5c;margin-top:12px;">📘 For more details, visit <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">Azure SDK Tools Agent documentation</a>.</p>
-      </div>
+      <div class="modal-body" x-html="$store.app.modalBody"></div>
     </div>
   </div>
 
-  <div id="tab-release-plans" class="tab-content active">
+  <div id="tab-release-plans" class="tab-content" x-data :class="{ active: $store.app.activeTab === 'tab-release-plans' }">
 
-  <div id="stats-bar" class="stats-bar" hidden>
-    <div class="stat"><span id="stat-total" class="stat-value">0</span><span class="stat-label">Total</span></div>
-    <div class="stat"><span id="stat-inprogress" class="stat-value">0</span><span class="stat-label">In Progress</span></div>
-    <div class="stat"><span id="stat-partial" class="stat-value">0</span><span class="stat-label">Partially Released</span></div>
-    <div class="stat"><span id="stat-new" class="stat-value">0</span><span class="stat-label">New / Not Started</span></div>
-    <div class="stat"><span id="stat-finished" class="stat-value">0</span><span class="stat-label">Finished in last 2 months</span></div>
+  <div id="stats-bar" class="stats-bar" x-data x-show="$store.app.showStatsBar" x-cloak>
+    <div class="stat"><span id="stat-total" class="stat-value" x-data x-text="$store.app.stats.total">0</span><span class="stat-label">Total</span></div>
+    <div class="stat"><span id="stat-inprogress" class="stat-value" x-data x-text="$store.app.stats.inprogress">0</span><span class="stat-label">In Progress</span></div>
+    <div class="stat"><span id="stat-partial" class="stat-value" x-data x-text="$store.app.stats.partial">0</span><span class="stat-label">Partially Released</span></div>
+    <div class="stat"><span id="stat-new" class="stat-value" x-data x-text="$store.app.stats.new">0</span><span class="stat-label">New / Not Started</span></div>
+    <div class="stat"><span id="stat-finished" class="stat-value" x-data x-text="$store.app.stats.finished">0</span><span class="stat-label">Finished in last 2 months</span></div>
   </div>
 
-  <div id="loading" class="loading">
+  <div id="loading" class="loading" x-data x-show="$store.app.loading" x-cloak>
     <div class="spinner"></div>
-    <p>Loading release plans&hellip;</p>
+    <p x-text="$store.app.loadingMessage">Loading release plans&hellip;</p>
   </div>
 
-  <div id="error-banner" class="error-banner" hidden></div>
+  <div id="error-banner" class="error-banner" x-data x-show="$store.app.error" x-text="$store.app.error" x-cloak></div>
 
-  <main id="content" hidden>
+  <main id="content" x-data x-show="$store.app.showContent" x-cloak>
     <div class="plane-columns">
       <!-- Management Plane -->
       <div class="plane-column" id="plane-col-mgmt">
@@ -180,7 +197,7 @@
 
   </div><!-- end tab-release-plans -->
 
-  <div id="tab-sdk-prs" class="tab-content">
+  <div id="tab-sdk-prs" class="tab-content" x-data :class="{ active: $store.app.activeTab === 'tab-sdk-prs' }">
     <div id="pr-loading" class="loading" style="display:none;">
       <div class="spinner"></div>
       <p>Extracting pull requests&hellip;</p>
@@ -188,7 +205,7 @@
     <div id="pr-list" class="pr-list"></div>
   </div><!-- end tab-sdk-prs -->
 
-  <div id="tab-pm-view" class="tab-content">
+  <div id="tab-pm-view" class="tab-content" x-data :class="{ active: $store.app.activeTab === 'tab-pm-view' }">
     <div class="pm-view-header">
       <h2>PM View — Release Plan Health</h2>
       <p class="pm-view-desc">Highlights release plans that need PM attention.</p>

@@ -1,4 +1,4 @@
-"use strict";
+import { describe, test, expect, vi, beforeAll, afterAll } from "vitest";
 
 // Tests for routes/api.js input validation and caching behavior
 // These test the route handlers' input validation without making real API calls.
@@ -12,37 +12,37 @@ process.env.GITHUB_APP_CLIENT_SECRET = "test-client-secret";
 process.env.DEVOPS_RELEASE_PLAN_PAT = "test-pat";
 
 // Mock external API calls
-jest.mock("../lib/devops-api", () => {
-  const original = jest.requireActual("../lib/devops-api");
+vi.mock("../lib/devops-api.js", async () => {
+  const original = await vi.importActual("../lib/devops-api.js");
   return {
     ...original,
-    devopsRequest: jest.fn().mockResolvedValue({ workItems: [], value: [] }),
-    devopsRequestWithHeaders: jest.fn().mockResolvedValue({ body: { value: [] }, headers: {} }),
-    runWiql: jest.fn().mockResolvedValue([]),
-    fetchWorkItemsBatch: jest.fn().mockResolvedValue([]),
-    fetchPackageWorkItems: jest.fn().mockResolvedValue(new Map()),
-    fetchAzureSdkPackageList: jest.fn().mockResolvedValue(""),
+    devopsRequest: vi.fn().mockResolvedValue({ workItems: [], value: [] }),
+    devopsRequestWithHeaders: vi.fn().mockResolvedValue({ body: { value: [] }, headers: {} }),
+    runWiql: vi.fn().mockResolvedValue([]),
+    fetchWorkItemsBatch: vi.fn().mockResolvedValue([]),
+    fetchPackageWorkItems: vi.fn().mockResolvedValue(new Map()),
+    fetchAzureSdkPackageList: vi.fn().mockResolvedValue(""),
   };
 });
 
-jest.mock("../lib/github-api", () => ({
+vi.mock("../lib/github-api.js", () => ({
   parseGitHubPrUrl: (url) => {
     if (!url) return null;
     const m = url.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
     return m ? { owner: m[1], repo: m[2], number: m[3] } : null;
   },
-  batchFetchPrStatuses: jest.fn().mockResolvedValue(new Map()),
-  batchFetchPrDetails: jest.fn().mockResolvedValue(new Map()),
-  batchFetchSpecProjectPaths: jest.fn().mockResolvedValue(new Map()),
+  batchFetchPrStatuses: vi.fn().mockResolvedValue(new Map()),
+  batchFetchPrDetails: vi.fn().mockResolvedValue(new Map()),
+  batchFetchSpecProjectPaths: vi.fn().mockResolvedValue(new Map()),
 }));
 
-const express = require("express");
-const http = require("http");
-const session = require("express-session");
+import express from "express";
+import http from "node:http";
+import session from "express-session";
 
 let app, server;
 
-beforeAll((done) => {
+beforeAll(async () => {
   app = express();
   app.use(session({ secret: "test", resave: false, saveUninitialized: false }));
   app.use(express.json());
@@ -53,14 +53,14 @@ beforeAll((done) => {
     next();
   });
 
-  const apiRoutes = require("../routes/api");
+  const { default: apiRoutes } = await import("../routes/api.js");
   app.use(apiRoutes);
 
-  server = app.listen(0, done);
+  await new Promise((resolve) => { server = app.listen(0, resolve); });
 });
 
-afterAll((done) => {
-  server.close(done);
+afterAll(async () => {
+  await new Promise((resolve) => { server.close(resolve); });
 });
 
 function getPort() { return server.address().port; }

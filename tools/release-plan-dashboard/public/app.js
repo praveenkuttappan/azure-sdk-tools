@@ -9,21 +9,82 @@
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => document.querySelectorAll(sel);
 
+  // Alpine store reference — safe access that handles timing before Alpine loads
+  function store() {
+    if (typeof Alpine !== 'undefined' && Alpine.store) {
+      return Alpine.store('app');
+    }
+    // Fallback proxy that queues updates (should rarely hit this)
+    return _storeProxy;
+  }
+
+  // Proxy object that buffers store updates before Alpine initializes
+  const _pendingUpdates = [];
+  const _storeProxy = new Proxy({
+    loading: true, loadingMessage: 'Loading release plans\u2026', error: '',
+    showContent: false, showStatsBar: false,
+    stats: { total: 0, inprogress: 0, partial: 0, new: 0, finished: 0, mgmt: 0, data: 0 },
+    user: { name: '', isPM: false },
+    filters: { search: '', plane: '', month: '' },
+    prFilterVisible: false,
+  }, {
+    set(target, prop, value) {
+      target[prop] = value;
+      _pendingUpdates.push({ prop, value });
+      return true;
+    }
+  });
+
+  // Flush buffered updates once Alpine is ready
+  document.addEventListener('alpine:init', () => {
+    const s = Alpine.store('app');
+    for (const { prop, value } of _pendingUpdates) {
+      if (typeof value === 'object' && !Array.isArray(value) && s[prop] && typeof s[prop] === 'object') {
+        Object.assign(s[prop], value);
+      } else {
+        s[prop] = value;
+      }
+    }
+    _pendingUpdates.length = 0;
+  });
+
   // ── Create Release Plan guide modal ────────────────────────
+  const _defaultModalTitle = 'How to Create a Release Plan';
+  const _defaultModalBody = `<p>Release plans can be created using the <strong>Azure SDK Tools agent</strong> via <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">Copilot CLI</a> or <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">VS Code</a>.</p>
+    <h3>Step 1: Clone the API specs repo</h3>
+    <pre class="guide-code"><code>git clone https://github.com/Azure/azure-rest-api-specs.git</code></pre>
+    <p>Open Copilot CLI or VS Code from the repo root.</p>
+    <h3>Step 2: Collect the following details</h3>
+    <ol class="guide-list">
+      <li><strong>Relative path</strong> to your TypeSpec project<br><em>e.g. <code>specification/contosowidgetmanager/Contoso.Management</code></em></li>
+      <li><strong>SDK release type:</strong> beta or stable</li>
+      <li><strong>API spec pull request</strong> (optional)</li>
+      <li><strong>Service Tree ID</strong> for your service <em>(optional*)</em></li>
+      <li><strong>Service Tree ID</strong> for your product <em>(optional*)</em></li>
+    </ol>
+    <p style="font-size:.82rem;color:#605e5c;">* Service Tree IDs are only required if this is the first time creating a release plan for your TypeSpec project path. For subsequent plans, they will be auto-populated.</p>
+    <h3>Step 3: Use this prompt</h3>
+    <p>Copy and paste the following prompt into Copilot CLI or VS Code Copilot chat, filling in your details:</p>
+    <pre class="guide-prompt"><code>Create a release plan for TypeSpec project with following details:
+- TypeSpec project path: &lt;specification/your-service/Your.Management&gt;
+- SDK release type: &lt;beta or stable&gt;
+- API spec PR: &lt;optional PR link&gt;
+- Service Tree ID (Service): &lt;optional, your-service-tree-id&gt;
+- Service Tree ID (Product): &lt;optional, your-product-tree-id&gt;</code></pre>
+    <p style="font-size:.82rem;color:#605e5c;margin-top:12px;">📘 For more details, visit <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">Azure SDK Tools Agent documentation</a>.</p>`;
+
+  // Set default modal content in store once Alpine is ready
+  document.addEventListener('alpine:init', () => {
+    const s = Alpine.store('app');
+    s._defaultModalTitle = _defaultModalTitle;
+    s._defaultModalBody = _defaultModalBody;
+  });
+
   const createPlanBtn = document.getElementById("btn-create-plan");
-  const createPlanModal = document.getElementById("create-plan-modal");
-  const modalCloseBtn = document.getElementById("modal-close");
-  // Store original modal content so it can be restored after action popups reuse the modal
-  const _originalModalTitle = createPlanModal ? createPlanModal.querySelector(".modal-header h2").innerHTML : "";
-  const _originalModalBody = createPlanModal ? createPlanModal.querySelector(".modal-body").innerHTML : "";
-  if (createPlanBtn && createPlanModal) {
+  if (createPlanBtn) {
     createPlanBtn.addEventListener("click", () => {
-      createPlanModal.querySelector(".modal-header h2").innerHTML = _originalModalTitle;
-      createPlanModal.querySelector(".modal-body").innerHTML = _originalModalBody;
-      createPlanModal.style.display = "";
+      store().openCreatePlanGuide();
     });
-    modalCloseBtn.addEventListener("click", () => { createPlanModal.style.display = "none"; });
-    createPlanModal.addEventListener("click", (e) => { if (e.target === createPlanModal) createPlanModal.style.display = "none"; });
   }
 
   // ── Load user info ────────────────────────────────────────────
@@ -32,14 +93,12 @@
     try {
       const res = await fetch("/auth/me");
       const user = await res.json();
-      const el = $("#user-info");
-      if (user && el) {
-        el.innerHTML = `<span class="user-name">${esc(user.name)}</span> <a href="/auth/logout" class="logout-link">Logout</a>`;
+      if (user && user.name) {
+        store().user.name = user.name;
       }
       if (user && user.isPM) {
         currentUserIsPM = true;
-        const pmTab = document.getElementById("tab-btn-pm");
-        if (pmTab) pmTab.style.display = "";
+        store().user.isPM = true;
       }
     } catch { /* ignore */ }
   }
@@ -47,8 +106,8 @@
 
   // ── Fetch data ──────────────────────────────────────────────
   async function fetchPlans() {
-    showLoading(true);
-    hideError();
+    store().loading = true;
+    store().error = '';
 
     // Remember which cards are expanded before re-render
     const expandedIds = new Set();
@@ -70,11 +129,11 @@
 
       // Server is still warming up — show loading message and retry
       if (data.loading) {
-        showLoading(true, "Release plans are being fetched. Dashboard will be available shortly\u2026");
+        store().loadingMessage = "Release plans are being fetched. Dashboard will be available shortly\u2026";
         setTimeout(fetchPlans, 5000);
         return;
       }
-      showLoading(false);
+      store().loading = false;
       allPlans = data.plans || [];
 
       // Populate month filter dropdown from available release months
@@ -83,15 +142,13 @@
       // Apply URL filter param if present
       const urlFilter = params.get("filter") || "";
       if (urlFilter) {
-        const searchBox = $("#search-box");
-        if (searchBox) searchBox.value = urlFilter;
+        store().filters.search = urlFilter;
       }
 
       // Apply URL month param if present
       const urlMonth = params.get("month") || "";
       if (urlMonth) {
-        const monthSelect = document.getElementById("global-month-filter");
-        if (monthSelect) monthSelect.value = urlMonth;
+        store().filters.month = urlMonth;
       }
 
       render(allPlans);
@@ -137,9 +194,9 @@
       // Initialize PR tab with progressive status loading
       progressiveLoadPRStatuses(allPlans);
     } catch (err) {
-      showError(err.message);
+      store().error = err.message;
     } finally {
-      showLoading(false);
+      store().loading = false;
       resetCountdown();
     }
   }
@@ -378,7 +435,7 @@
   }
 
   function getGlobalPlaneFilter() {
-    return (document.getElementById("global-plane-filter") || {}).value || "";
+    return store().filters.plane;
   }
 
   // Populate the month filter dropdown with available release months
@@ -407,8 +464,8 @@
   // Update URL parameters to reflect current filter state (for sharing)
   function syncFiltersToUrl() {
     const params = new URLSearchParams(window.location.search);
-    const filter = ($("#search-box").value || "").trim();
-    const month = getMonthFilter();
+    const filter = store().filters.search.trim();
+    const month = store().filters.month;
 
     if (filter) params.set("filter", filter); else params.delete("filter");
     if (month) params.set("month", month); else params.delete("month");
@@ -439,14 +496,14 @@
   }
 
   function getMonthFilter() {
-    return (document.getElementById("global-month-filter") || {}).value || "";
+    return store().filters.month;
   }
 
   function render(plans) {
     detectDuplicates(plans);
     const planeFilter = getGlobalPlaneFilter();
     const monthFilter = getMonthFilter();
-    const filter = ($("#search-box").value || "").toLowerCase();
+    const filter = store().filters.search.toLowerCase();
     let filtered = filter ? plans.filter(p => matchesFilter(p, filter)) : plans;
     if (planeFilter) filtered = filtered.filter(p => classifyPlane(p) === planeFilter);
     if (monthFilter) filtered = filtered.filter(p => (p.releaseMonth || "").toLowerCase() === monthFilter.toLowerCase());
@@ -561,21 +618,29 @@
       if (dataHeading) dataHeading.style.display = "";
     }
 
-    // Stats
+    // Stats — update Alpine store
     const totalInProgress = mgmtSplit.inProgress.length + dataSplit.inProgress.length;
     const totalPartial = mgmtSplit.partial.length + dataSplit.partial.length;
     const totalNew = mgmtSplit.newItems.length + dataSplit.newItems.length;
     const totalFinished = mgmtSplit.finished.length + dataSplit.finished.length;
 
-    $("#stat-total").textContent = filtered.length;
-    $("#stat-inprogress").textContent = totalInProgress;
-    $("#stat-partial").textContent = totalPartial;
-    $("#stat-new").textContent = totalNew;
-    $("#stat-finished").textContent = totalFinished;
-    $("#stat-mgmt").textContent = `(${mgmt.length})`;
-    $("#stat-data").textContent = `(${data.length})`;
-    $("#stats-bar").hidden = !!singlePlan;
-    $("#content").hidden = false;
+    const s = store();
+    s.stats.total = filtered.length;
+    s.stats.inprogress = totalInProgress;
+    s.stats.partial = totalPartial;
+    s.stats.new = totalNew;
+    s.stats.finished = totalFinished;
+    s.stats.mgmt = mgmt.length;
+    s.stats.data = data.length;
+    s.showStatsBar = !singlePlan;
+    s.showContent = true;
+
+    // Update plane total labels (still in DOM, not yet Alpine-managed)
+    const statMgmt = $("#stat-mgmt");
+    const statData = $("#stat-data");
+    if (statMgmt) statMgmt.textContent = `(${mgmt.length})`;
+    if (statData) statData.textContent = `(${data.length})`;
+
     bindSectionHeaders();
   }
 
@@ -702,28 +767,13 @@
         const planId = btn.dataset.planId;
         if (!planId) return;
         const shareUrl = `${window.location.origin}/?releasePlan=${encodeURIComponent(planId)}`;
-        const modal = document.getElementById("create-plan-modal");
-        if (modal) {
-          modal.querySelector(".modal-header h2").textContent = "Share Release Plan";
-          modal.querySelector(".modal-body").innerHTML = `
-            <p>Copy the link below to share this release plan:</p>
-            <div class="share-link-row">
-              <input type="text" class="share-link-input" value="${shareUrl.replace(/"/g, '&quot;')}" readonly />
-              <button class="share-copy-btn" title="Copy to clipboard">📋</button>
-            </div>`;
-          modal.style.display = "";
-          const copyBtn = modal.querySelector(".share-copy-btn");
-          const input = modal.querySelector(".share-link-input");
-          if (copyBtn && input) {
-            copyBtn.addEventListener("click", () => {
-              navigator.clipboard.writeText(input.value).then(() => {
-                copyBtn.textContent = "✅";
-                setTimeout(() => { copyBtn.textContent = "📋"; }, 1500);
-              });
-            });
-            input.addEventListener("click", () => input.select());
-          }
-        }
+        const body = `
+          <p>Copy the link below to share this release plan:</p>
+          <div class="share-link-row">
+            <input type="text" class="share-link-input" value="${shareUrl.replace(/"/g, '&quot;')}" readonly onclick="this.select()" />
+            <button class="share-copy-btn" title="Copy to clipboard" onclick="navigator.clipboard.writeText(this.previousElementSibling.value).then(() => { this.textContent = '✅'; setTimeout(() => { this.textContent = '📋'; }, 1500); })">📋</button>
+          </div>`;
+        store().openModal("Share Release Plan", body);
       });
     });
   }
@@ -1658,29 +1708,21 @@
   }
 
   function showLoading(show, message) {
-    const el = $("#loading");
-    el.style.display = show ? "" : "none";
-    if (message) {
-      const p = el.querySelector("p");
-      if (p) p.textContent = message;
-    }
+    store().loading = show;
+    if (message) store().loadingMessage = message;
   }
 
   function hideLoading() {
-    showLoading(false);
-    // Reset default message
-    const p = $("#loading").querySelector("p");
-    if (p) p.textContent = "Loading release plans\u2026";
+    store().loading = false;
+    store().loadingMessage = "Loading release plans\u2026";
   }
 
   function showError(msg) {
-    const el = $("#error-banner");
-    el.textContent = msg;
-    el.hidden = false;
+    store().error = msg;
   }
 
   function hideError() {
-    $("#error-banner").hidden = true;
+    store().error = '';
   }
 
   function updateTimestamp(iso) {
@@ -1753,62 +1795,53 @@
       const prUrl = actionBtn.dataset.prUrl;
       const pkg = actionBtn.dataset.pkg;
       const { title, body } = buildActionPopupContent(type, lang, planId, specPath, prUrl, pkg);
-      // Reuse the modal
-      const modal = document.getElementById("create-plan-modal");
-      if (modal) {
-        modal.querySelector(".modal-header h2").textContent = title;
-        modal.querySelector(".modal-body").innerHTML = body;
-        modal.style.display = "";
-      }
+      store().openModal(title, body);
     }
   });
 
-  // ── Search ──────────────────────────────────────────────────
+  // ── Search & Filter reactivity ───────────────────────────────
+  // Alpine x-model updates the store; we watch for changes via Alpine effect
+  // Register in alpine:init (fires after our store is created in head script)
   let searchTimeout = null;
-  $("#search-box").addEventListener("input", () => {
-    clearTimeout(searchTimeout);
-    searchTimeout = setTimeout(async () => {
-      render(allPlans);
-      if (currentUserIsPM) renderPMView(allPlans);
-      renderFilteredPRs();
-      syncFiltersToUrl();
-      // If filter looks like a plan ID and no results found locally, try server lookup
-      const filter = ($("#search-box").value || "").trim();
-      if (/^\d+$/.test(filter)) {
-        const found = allPlans.some(p => String(p.releasePlanId) === filter || String(p.id) === filter);
-        if (!found) {
-          try {
-            const res = await fetch(`/api/release-plans?releasePlan=${encodeURIComponent(filter)}`);
-            if (res.ok) {
-              const data = await res.json();
-              if (data.plans && data.plans.length) {
-                for (const plan of data.plans) {
-                  if (!allPlans.some(p => p.id === plan.id)) allPlans.push(plan);
+  let effectInitialized = false;
+  document.addEventListener('alpine:init', () => {
+    if (effectInitialized) return;
+    effectInitialized = true;
+    Alpine.effect(() => {
+      // Access reactive properties to register dependency
+      const _search = store().filters.search;
+      const _plane = store().filters.plane;
+      const _month = store().filters.month;
+      // Skip re-render if plans not loaded yet
+      if (!allPlans.length) return;
+      // Debounce render to avoid excessive re-renders
+      clearTimeout(searchTimeout);
+      searchTimeout = setTimeout(() => {
+        render(allPlans);
+        if (currentUserIsPM) renderPMView(allPlans);
+        renderFilteredPRs();
+        syncFiltersToUrl();
+        // If filter looks like a plan ID and no results found locally, try server lookup
+        const filter = store().filters.search.trim();
+        if (/^\d+$/.test(filter)) {
+          const found = allPlans.some(p => String(p.releasePlanId) === filter || String(p.id) === filter);
+          if (!found) {
+            fetch(`/api/release-plans?releasePlan=${encodeURIComponent(filter)}`)
+              .then(res => res.ok ? res.json() : null)
+              .then(data => {
+                if (data && data.plans && data.plans.length) {
+                  for (const plan of data.plans) {
+                    if (!allPlans.some(p => p.id === plan.id)) allPlans.push(plan);
+                  }
+                  render(allPlans);
+                  progressiveLoadPRStatuses(allPlans);
                 }
-                render(allPlans);
-                progressiveLoadPRStatuses(allPlans);
-              }
-            }
-          } catch { /* ignore */ }
+              })
+              .catch(() => {});
+          }
         }
-      }
-    }, 250);
-  });
-
-  // Global plane filter — re-renders all tabs
-  document.getElementById("global-plane-filter").addEventListener("change", () => {
-    render(allPlans);
-    if (currentUserIsPM) renderPMView(allPlans);
-    renderFilteredPRs();
-    syncFiltersToUrl();
-  });
-
-  // Global month filter — re-renders all tabs
-  document.getElementById("global-month-filter").addEventListener("change", () => {
-    render(allPlans);
-    if (currentUserIsPM) renderPMView(allPlans);
-    renderFilteredPRs();
-    syncFiltersToUrl();
+      }, 250);
+    });
   });
 
   // ══════════════════════════════════════════════════════════════
@@ -1980,24 +2013,8 @@
   }
 
   // ══════════════════════════════════════════════════════════════
-  // ── Tab switching ─────────────────────────────────────────────
+  // ── Tab switching (handled by Alpine store) ───────────────────
   // ══════════════════════════════════════════════════════════════
-  const tabBtns = document.querySelectorAll(".tab-btn");
-  const tabContents = document.querySelectorAll(".tab-content");
-
-  tabBtns.forEach(btn => {
-    btn.addEventListener("click", () => {
-      const targetId = btn.dataset.tab;
-      tabBtns.forEach(b => b.classList.remove("active"));
-      tabContents.forEach(tc => tc.classList.remove("active"));
-      btn.classList.add("active");
-      const target = document.getElementById(targetId);
-      if (target) target.classList.add("active");
-      // Show/hide PR-specific filters in the tab bar
-      const prFilters = document.getElementById("pr-tab-filters");
-      if (prFilters) prFilters.style.display = targetId === "tab-sdk-prs" ? "" : "none";
-    });
-  });
 
   // ══════════════════════════════════════════════════════════════
   // ── SDK Pull Requests Tab ─────────────────────────────────────
@@ -2142,7 +2159,7 @@
   function filterPRs(prs) {
     const langFilter = (document.getElementById("pr-filter-lang") || {}).value || "";
     const statusFilter = (document.getElementById("pr-filter-status") || {}).value || "";
-    const textFilter = ($("#search-box").value || "").toLowerCase();
+    const textFilter = store().filters.search.toLowerCase();
     const planeFilter = getGlobalPlaneFilter();
 
     return prs.filter(pr => {

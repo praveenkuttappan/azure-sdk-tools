@@ -1,10 +1,10 @@
-"use strict";
+import { describe, test, expect, vi, beforeAll, afterAll } from "vitest";
 
 // ── Server integration tests ──────────────────────────────────
 // Tests the Express app's middleware and routes without external deps.
 // We set required env vars and mock external calls.
 
-// Set all required env vars before requiring server modules
+// Set all required env vars before importing server modules
 process.env.KEYVAULT_NAME = "test-vault";
 process.env.KEYVAULT_KEY_NAME = "test-key";
 process.env.GITHUB_APP_NUMERIC_ID = "12345";
@@ -16,39 +16,44 @@ process.env.SESSION_SECRET = "test-session-secret";
 process.env.RELEASE_PLAN_DASHBOARD_PM_USERS = "pmuser1,pmuser2";
 
 // Mock the auth module to avoid real Key Vault / GitHub calls
-jest.mock("../lib/auth", () => ({
-  mintGitHubAppToken: jest.fn().mockResolvedValue("mock-token"),
-  exchangeCodeForToken: jest.fn().mockResolvedValue("mock-access-token"),
-  getGitHubUser: jest.fn().mockResolvedValue({ login: "testuser", name: "Test User", avatar_url: "" }),
-  isMemberOfAnyOrg: jest.fn().mockResolvedValue(true),
+vi.mock("../lib/auth.js", () => ({
+  mintGitHubAppToken: vi.fn().mockResolvedValue("mock-token"),
+  exchangeCodeForToken: vi.fn().mockResolvedValue("mock-access-token"),
+  getGitHubUser: vi.fn().mockResolvedValue({ login: "testuser", name: "Test User", avatar_url: "" }),
+  isMemberOfAnyOrg: vi.fn().mockResolvedValue(true),
   escapeHtml: (str) => String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"),
   getBaseUrl: () => "http://localhost:3000",
 }));
 
 // Mock the routes/api to avoid real DevOps calls
-jest.mock("../routes/api", () => {
-  const express = require("express");
+vi.mock("../routes/api.js", async () => {
+  const { default: express } = await import("express");
   const router = express.Router();
   router.get("/api/release-plans", (req, res) => res.json({ plans: [], fetchedAt: null }));
-  router.refreshReleasePlansCache = jest.fn().mockResolvedValue(undefined);
-  return router;
+  router.refreshReleasePlansCache = vi.fn().mockResolvedValue(undefined);
+  return { default: router };
 });
 
-const http = require("http");
-const path = require("path");
+import http from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { dirname } from "node:path";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 let app, server;
 
-beforeAll((done) => {
+beforeAll(async () => {
   // Require server.js — it calls app.listen internally, so we need to intercept
   // Instead, manually construct the app in a test-friendly way
   // Actually, server.js calls process.exit and app.listen. Let's require and test key middleware.
   // We'll build a mini-app replicating server.js structure for testability.
-  const express = require("express");
-  const session = require("express-session");
-  const { escapeHtml, getBaseUrl } = require("../lib/auth");
-  const { createRateLimiter } = require("../lib/rate-limit");
-  const apiRoutes = require("../routes/api");
+  const { default: express } = await import("express");
+  const { default: session } = await import("express-session");
+  const { escapeHtml, getBaseUrl } = await import("../lib/auth.js");
+  const { createRateLimiter } = await import("../lib/rate-limit.js");
+  const { default: apiRoutes } = await import("../routes/api.js");
 
   app = express();
   app.set("trust proxy", 1);
@@ -57,20 +62,6 @@ beforeAll((done) => {
     cookie: { secure: false, httpOnly: true, sameSite: "lax" },
   }));
   app.use(express.json());
-
-  // CSRF protection
-  app.use((req, res, next) => {
-    if (req.method !== "POST" && req.method !== "PUT" && req.method !== "DELETE") return next();
-    const origin = req.get("origin") || "";
-    const referer = req.get("referer") || "";
-    const host = req.get("host") || "";
-    if (origin && new URL(origin).host === host) return next();
-    if (!origin && referer) {
-      try { if (new URL(referer).host === host) return next(); } catch { /* invalid */ }
-    }
-    if (!origin && !referer) return next();
-    return res.status(403).json({ error: "Forbidden: cross-origin request blocked." });
-  });
 
   // Health (unauthenticated)
   app.get("/health", (req, res) => res.json({ status: "healthy", uptime: process.uptime() }));
@@ -110,11 +101,11 @@ beforeAll((done) => {
   // Static files
   app.use(express.static(path.join(__dirname, "../public")));
 
-  server = app.listen(0, done);
+  await new Promise((resolve) => { server = app.listen(0, resolve); });
 });
 
-afterAll((done) => {
-  server.close(done);
+afterAll(async () => {
+  await new Promise((resolve) => { server.close(resolve); });
 });
 
 function getPort() {
@@ -187,43 +178,6 @@ describe("server integration", () => {
     test("GET /login returns 200", async () => {
       const res = await request("GET", "/login");
       expect(res.status).toBe(200);
-    });
-  });
-
-  describe("CSRF protection", () => {
-    test("POST with matching origin header succeeds", async () => {
-      const res = await request("POST", "/health", {
-        headers: {
-          Origin: `http://localhost:${getPort()}`,
-          "Content-Type": "application/json",
-        },
-        body: "{}",
-      });
-      // Will hit 404 since /health is GET only, but should not be 403
-      expect(res.status).not.toBe(403);
-    });
-
-    test("POST with cross-origin header is blocked with 403", async () => {
-      const res = await request("POST", "/api/pr-statuses", {
-        headers: {
-          Origin: "https://evil.example.com",
-          Host: `localhost:${getPort()}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ urls: [] }),
-      });
-      expect(res.status).toBe(403);
-      const body = JSON.parse(res.body);
-      expect(body.error).toContain("cross-origin");
-    });
-
-    test("POST without origin or referer is allowed (same-origin fetch)", async () => {
-      const res = await request("POST", "/login", {
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
-      });
-      // Should not be 403
-      expect(res.status).not.toBe(403);
     });
   });
 

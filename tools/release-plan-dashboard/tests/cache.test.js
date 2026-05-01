@@ -1,6 +1,5 @@
-"use strict";
-
-const { cache, evictOldest, CACHE_TTL_MS, PR_DETAIL_CACHE_TTL_MS, MAX_CACHE_ENTRIES } = require("../lib/cache");
+import { describe, test, expect } from "vitest";
+import { cache, evictOldest, CACHE_TTL_MS, PR_DETAIL_CACHE_TTL_MS, MAX_CACHE_ENTRIES } from "../lib/cache.js";
 
 describe("cache module", () => {
   describe("constants", () => {

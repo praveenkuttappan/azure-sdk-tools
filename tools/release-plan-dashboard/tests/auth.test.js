@@ -1,14 +1,14 @@
-"use strict";
+import { describe, test, expect } from "vitest";
 
 // Test auth module functions that don't require external network calls
 
-// Set env vars before requiring the module
+// Set env vars before importing the module
 process.env.KEYVAULT_NAME = "test-vault";
 process.env.KEYVAULT_KEY_NAME = "test-key";
 process.env.GITHUB_APP_NUMERIC_ID = "12345";
 process.env.GITHUB_INSTALL_OWNER = "TestOrg";
 
-const { escapeHtml, getBaseUrl } = require("../lib/auth");
+import { escapeHtml, getBaseUrl } from "../lib/auth.js";
 
 describe("auth module", () => {
   describe("escapeHtml", () => {

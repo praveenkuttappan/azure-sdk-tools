@@ -1,7 +1,4 @@
-"use strict";
-
-const https = require("https");
-const { DefaultAzureCredential } = require("@azure/identity");
+import { DefaultAzureCredential } from "@azure/identity";
 
 // ══════════════════════════════════════════════════════════════
 // ── Azure DevOps helpers ──────────────────────────────────────
@@ -57,47 +54,33 @@ async function getAuthHeader() {
 
 async function devopsRequest(urlPath, method, body) {
   const authHeader = await getAuthHeader();
-  return new Promise((resolve, reject) => {
-    const url = new URL(urlPath);
-    const options = {
-      hostname: url.hostname, path: url.pathname + url.search, method: method || "GET",
-      headers: { Authorization: authHeader, "Content-Type": "application/json", Accept: "application/json" },
-    };
-    const req = https.request(options, (res) => {
-      let data = "";
-      res.on("data", (c) => (data += c));
-      res.on("end", () => {
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          try { resolve(JSON.parse(data)); } catch { resolve(data); }
-        } else { reject(new Error(`DevOps ${res.statusCode}: ${data.substring(0, 500)}`)); }
-      });
-    });
-    req.on("error", reject);
-    if (body) req.write(JSON.stringify(body));
-    req.end();
-  });
+  const options = {
+    method: method || "GET",
+    headers: { Authorization: authHeader, "Content-Type": "application/json", Accept: "application/json" },
+  };
+  if (body) options.body = JSON.stringify(body);
+  const response = await fetch(urlPath, options);
+  const text = await response.text();
+  if (response.ok) {
+    try { return JSON.parse(text); } catch { return text; }
+  }
+  throw new Error(`DevOps ${response.status}: ${text.substring(0, 500)}`);
 }
 
-function devopsRequestWithHeaders(urlPath, method, body) {
-  return new Promise((resolve, reject) => {
-    const url = new URL(urlPath);
-    const options = {
-      hostname: url.hostname, path: url.pathname + url.search, method: method || "GET",
-      headers: { Authorization: getAuthHeader(), "Content-Type": "application/json", Accept: "application/json" },
-    };
-    const req = https.request(options, (res) => {
-      let data = "";
-      res.on("data", (c) => (data += c));
-      res.on("end", () => {
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          try { resolve({ body: JSON.parse(data), headers: res.headers }); } catch { resolve({ body: data, headers: res.headers }); }
-        } else { reject(new Error(`DevOps ${res.statusCode}: ${data.substring(0, 500)}`)); }
-      });
-    });
-    req.on("error", reject);
-    if (body) req.write(JSON.stringify(body));
-    req.end();
-  });
+async function devopsRequestWithHeaders(urlPath, method, body) {
+  const authHeader = await getAuthHeader();
+  const options = {
+    method: method || "GET",
+    headers: { Authorization: authHeader, "Content-Type": "application/json", Accept: "application/json" },
+  };
+  if (body) options.body = JSON.stringify(body);
+  const response = await fetch(urlPath, options);
+  const text = await response.text();
+  if (response.ok) {
+    const headers = Object.fromEntries(response.headers.entries());
+    try { return { body: JSON.parse(text), headers }; } catch { return { body: text, headers }; }
+  }
+  throw new Error(`DevOps ${response.status}: ${text.substring(0, 500)}`);
 }
 
 async function runWiql(query) {
@@ -120,20 +103,20 @@ async function fetchWorkItemsBatch(ids, fields) {
   return allItems;
 }
 
-function extractChildIds(wi) {
+function extractChildIds(workItem) {
   const ids = [];
-  if (wi.relations) {
-    for (const r of wi.relations) {
-      if (r.rel === "System.LinkTypes.Hierarchy-Forward" && r.url) {
-        const m = r.url.match(/\/workItems\/(\d+)$/);
-        if (m) ids.push(parseInt(m[1], 10));
+  if (workItem.relations) {
+    for (const rel of workItem.relations) {
+      if (rel.rel === "System.LinkTypes.Hierarchy-Forward" && rel.url) {
+        const match = rel.url.match(/\/workItems\/(\d+)$/);
+        if (match) ids.push(parseInt(match[1], 10));
       }
     }
   }
   return ids;
 }
 
-function getField(wi, name) { return wi.fields ? wi.fields[name] : undefined; }
+function getField(workItem, name) { return workItem.fields ? workItem.fields[name] : undefined; }
 
 function stripEmail(val) {
   if (!val) return "";
@@ -144,66 +127,66 @@ function stripEmail(val) {
   return cleaned;
 }
 
-function mapReleasePlan(wi, apiSpecMap) {
-  const f = wi.fields || {};
-  const id = wi.id || f["System.Id"];
+function mapReleasePlan(workItem, apiSpecMap) {
+  const fields = workItem.fields || {};
+  const id = workItem.id || fields["System.Id"];
   const languages = {};
   for (const lang of LANGUAGES) {
     languages[LANGUAGE_DISPLAY[lang]] = {
-      packageName: f[`Custom.${lang}PackageName`] || "",
-      sdkPrUrl: (f[`Custom.SDKPullRequestFor${lang}`] || "").trim().replace(/\/+$/, ""),
-      prStatus: f[`Custom.SDKPullRequestStatusFor${lang}`] || "",
-      releaseStatus: f[`Custom.ReleaseStatusFor${lang}`] || "",
-      exclusionStatus: f[`Custom.ReleaseExclusionStatusFor${lang}`] || "",
-      generationStatus: f[`Custom.GenerationStatusFor${lang}`] || "",
-      releasedVersion: f[`Custom.ReleasedVersionFor${lang}`] || "",
+      packageName: fields[`Custom.${lang}PackageName`] || "",
+      sdkPrUrl: (fields[`Custom.SDKPullRequestFor${lang}`] || "").trim().replace(/\/+$/, ""),
+      prStatus: fields[`Custom.SDKPullRequestStatusFor${lang}`] || "",
+      releaseStatus: fields[`Custom.ReleaseStatusFor${lang}`] || "",
+      exclusionStatus: fields[`Custom.ReleaseExclusionStatusFor${lang}`] || "",
+      generationStatus: fields[`Custom.GenerationStatusFor${lang}`] || "",
+      releasedVersion: fields[`Custom.ReleasedVersionFor${lang}`] || "",
     };
   }
-  const childIds = extractChildIds(wi);
+  const childIds = extractChildIds(workItem);
   let apiSpec = null;
   for (const cid of childIds) {
     const specWi = apiSpecMap[cid];
     if (specWi) {
-      const sf = specWi.fields || {};
-      let specPrUrl = (sf["Custom.ActiveSpecPullRequestUrl"] || "").trim().replace(/\/+$/, "");
-      const reviewsHtml = sf["Custom.RESTAPIReviews"] || "";
+      const specFields = specWi.fields || {};
+      let specPrUrl = (specFields["Custom.ActiveSpecPullRequestUrl"] || "").trim().replace(/\/+$/, "");
+      const reviewsHtml = specFields["Custom.RESTAPIReviews"] || "";
       const allSpecPrUrls = [];
       const hrefRegex = /href="([^"]+)"/g;
-      let hm;
-      while ((hm = hrefRegex.exec(reviewsHtml)) !== null) {
-        const u = hm[1].trim().replace(/\/+$/, "");
-        if (/github\.com\/.*\/pull\/\d+/.test(u) && !allSpecPrUrls.includes(u)) allSpecPrUrls.push(u);
+      let match;
+      while ((match = hrefRegex.exec(reviewsHtml)) !== null) {
+        const url = match[1].trim().replace(/\/+$/, "");
+        if (/github\.com\/.*\/pull\/\d+/.test(url) && !allSpecPrUrls.includes(url)) allSpecPrUrls.push(url);
       }
       if (!specPrUrl && allSpecPrUrls.length) specPrUrl = allSpecPrUrls[0];
       const previousSpecPrUrls = allSpecPrUrls.filter(u => u !== specPrUrl);
-      apiSpec = { id: cid, specPrUrl, previousSpecPrUrls, apiVersion: sf["Custom.APISpecversion"] || "", definitionType: sf["Custom.APISpecDefinitionType"] || "" };
+      apiSpec = { id: cid, specPrUrl, previousSpecPrUrls, apiVersion: specFields["Custom.APISpecversion"] || "", definitionType: specFields["Custom.APISpecDefinitionType"] || "" };
       break;
     }
   }
-  const createdBy = f["System.CreatedBy"];
+  const createdBy = fields["System.CreatedBy"];
   const createdByName = typeof createdBy === "object" ? createdBy.displayName || "" : "";
-  const rawSubmittedBy = f["Custom.ReleasePlanSubmittedby"];
+  const rawSubmittedBy = fields["Custom.ReleasePlanSubmittedby"];
   const submittedByName = typeof rawSubmittedBy === "object" && rawSubmittedBy
     ? rawSubmittedBy.displayName || rawSubmittedBy.uniqueName || ""
     : (rawSubmittedBy || "");
   return {
-    id, title: f["System.Title"] || "", state: f["System.State"] || "",
-    createdDate: f["System.CreatedDate"] || "", changedDate: f["System.ChangedDate"] || "",
+    id, title: fields["System.Title"] || "", state: fields["System.State"] || "",
+    createdDate: fields["System.CreatedDate"] || "", changedDate: fields["System.ChangedDate"] || "",
     createdBy: stripEmail(createdByName),
-    releaseMonth: f["Custom.SDKReleasemonth"] || "", releaseType: f["Custom.SDKtypetobereleased"] || "",
-    releasePlanId: f["Custom.ReleasePlanID"] || "", releasePlanLink: f["Custom.ReleasePlanLink"] || "",
+    releaseMonth: fields["Custom.SDKReleasemonth"] || "", releaseType: fields["Custom.SDKtypetobereleased"] || "",
+    releasePlanId: fields["Custom.ReleasePlanID"] || "", releasePlanLink: fields["Custom.ReleasePlanLink"] || "",
     submittedBy: (submittedByName || createdByName),
-    ownerPM: stripEmail(f["Custom.PrimaryPM"] || ""),
-    typeSpecPath: f["Custom.ApiSpecProjectPath"] || "",
-    mgmtScope: f["Custom.MgmtScope"] || "", dataScope: f["Custom.DataScope"] || "",
-    sdkLanguages: f["Custom.SDKLanguages"] || "",
-    specApprovalStatus: f["Custom.APISpecApprovalStatus"] || "",
-    productName: f["Custom.ProductName"] || "", productLifecycle: f["Custom.ProductLifecycle"] || "",
-    releasePlanType: f["Custom.ReleasePlanType"] || "",
-    serviceName: f["Custom.ServiceName"] || "",
-    createdUsing: f["Custom.CreatedUsing"] || "",
-    productId: f["Custom.ProductServiceTreeID"] || "",
-    productServiceTreeLink: f["Custom.ProductServiceTreeLink"] || "",
+    ownerPM: stripEmail(fields["Custom.PrimaryPM"] || ""),
+    typeSpecPath: fields["Custom.ApiSpecProjectPath"] || "",
+    mgmtScope: fields["Custom.MgmtScope"] || "", dataScope: fields["Custom.DataScope"] || "",
+    sdkLanguages: fields["Custom.SDKLanguages"] || "",
+    specApprovalStatus: fields["Custom.APISpecApprovalStatus"] || "",
+    productName: fields["Custom.ProductName"] || "", productLifecycle: fields["Custom.ProductLifecycle"] || "",
+    releasePlanType: fields["Custom.ReleasePlanType"] || "",
+    serviceName: fields["Custom.ServiceName"] || "",
+    createdUsing: fields["Custom.CreatedUsing"] || "",
+    productId: fields["Custom.ProductServiceTreeID"] || "",
+    productServiceTreeLink: fields["Custom.ProductServiceTreeLink"] || "",
     languages, apiSpec,
   };
 }
@@ -225,12 +208,12 @@ async function fetchPackageWorkItems(pkgLangPairs) {
       if (!ids.length) continue;
       const items = await fetchWorkItemsBatch(ids, PACKAGE_FIELDS);
       for (const item of items) {
-        const f = item.fields || {};
-        const key = `${f["Custom.Package"] || ""}|${f["Custom.Language"] || ""}`;
+        const itemFields = item.fields || {};
+        const key = `${itemFields["Custom.Package"] || ""}|${itemFields["Custom.Language"] || ""}`;
         const existing = resultMap.get(key);
-        const changedDate = new Date(f["System.ChangedDate"] || 0);
+        const changedDate = new Date(itemFields["System.ChangedDate"] || 0);
         if (!existing || changedDate > existing._changedDate) {
-          resultMap.set(key, { _changedDate: changedDate, version: f["Custom.PackageVersion"] || "", apiReviewStatus: f["Custom.APIReviewStatus"] || "", namespaceApproval: f["Custom.PackageNameApprovalStatus"] || "" });
+          resultMap.set(key, { _changedDate: changedDate, version: itemFields["Custom.PackageVersion"] || "", apiReviewStatus: itemFields["Custom.APIReviewStatus"] || "", namespaceApproval: itemFields["Custom.PackageNameApprovalStatus"] || "" });
         }
       }
     } catch (err) { console.warn("Package WI error:", err.message); }
@@ -238,13 +221,12 @@ async function fetchPackageWorkItems(pkgLangPairs) {
   return resultMap;
 }
 
-function fetchAzureSdkPackageList() {
-  return new Promise(resolve => {
-    https.get("https://azure.github.io/azure-sdk/", res => {
-      if (res.statusCode !== 200) { resolve(""); res.resume(); return; }
-      let d = ""; res.on("data", c => (d += c)); res.on("end", () => resolve(d));
-    }).on("error", () => resolve(""));
-  });
+async function fetchAzureSdkPackageList() {
+  try {
+    const response = await fetch("https://azure.github.io/azure-sdk/");
+    if (!response.ok) return "";
+    return await response.text();
+  } catch { return ""; }
 }
 
 function isKnownPackage(name, page) { return name && page && page.toLowerCase().includes(name.toLowerCase()); }
@@ -255,7 +237,7 @@ function isGAVersion(v) {
   return !l.includes("beta") && !l.includes("alpha") && !l.includes("preview") && !l.includes("rc") && !/[-.]b\d/.test(l);
 }
 
-module.exports = {
+export {
   DEVOPS_ORG,
   DEVOPS_PROJECT,
   API_VERSION,

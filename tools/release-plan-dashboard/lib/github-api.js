@@ -1,58 +1,56 @@
-"use strict";
-
-const https = require("https");
+import { Octokit } from "@octokit/rest";
 
 // ══════════════════════════════════════════════════════════════
 // ── GitHub API helpers (for release plan data) ────────────────
 // ══════════════════════════════════════════════════════════════
 
-function githubRequest(apiPath, _retryCount = 0) {
-  const pat = process.env.GITHUB_PAT_RELEASE_PLAN || process.env.GH_TOKEN;
-  if (!pat) return Promise.resolve(null);
-  return _githubRequestWithAuth(`token ${pat}`, apiPath, _retryCount);
-}
-
-function githubRequestWithToken(bearerToken, apiPath, _retryCount = 0) {
-  if (!bearerToken) return Promise.resolve(null);
-  return _githubRequestWithAuth(`Bearer ${bearerToken}`, apiPath, _retryCount);
-}
-
-function _githubRequestWithAuth(authHeader, apiPath, _retryCount = 0) {
-  return new Promise((resolve, reject) => {
-    const options = {
-      hostname: "api.github.com", path: apiPath, method: "GET",
-      headers: { Authorization: authHeader, Accept: "application/vnd.github+json", "User-Agent": "release-plan-dashboard" },
-    };
-    const req = https.request(options, (res) => {
-      let data = "";
-      res.on("data", (c) => (data += c));
-      res.on("end", () => {
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          try { resolve(JSON.parse(data)); } catch { resolve(null); }
-        } else if ((res.statusCode === 403 || res.statusCode === 429) && _retryCount < 2) {
-          const isSamlOrAuth = data.includes("SAML enforcement") || data.includes("organization has enabled") || data.includes("Resource protected");
-          if (res.statusCode === 403 && isSamlOrAuth) {
-            console.warn(`GitHub SAML/SSO error (403) ${apiPath}: ${data.substring(0, 200)}`);
-            resolve(null);
-          } else {
-            const retryAfter = parseInt(res.headers["retry-after"] || "0", 10);
-            const resetEpoch = parseInt(res.headers["x-ratelimit-reset"] || "0", 10);
-            let waitMs = retryAfter ? retryAfter * 1000 : 0;
-            if (!waitMs && resetEpoch) waitMs = Math.max(0, resetEpoch * 1000 - Date.now()) + 1000;
-            waitMs = Math.min(waitMs || 5000, 60000);
-            console.warn(`GitHub rate limited (${res.statusCode}) ${apiPath}, retry in ${waitMs}ms`);
-            setTimeout(() => _githubRequestWithAuth(authHeader, apiPath, _retryCount + 1).then(resolve, reject), waitMs);
-          }
-        } else {
-          console.warn(`GitHub ${apiPath} returned ${res.statusCode}: ${data.substring(0, 200)}`);
-          resolve(null);
-        }
-      });
-    });
-    req.on("error", (err) => { console.warn(`GitHub error ${apiPath}:`, err.message); resolve(null); });
-    req.setTimeout(30000, () => { req.destroy(); console.warn(`GitHub timeout ${apiPath}`); resolve(null); });
-    req.end();
+function getOctokit(token) {
+  const auth = token || process.env.GITHUB_PAT_RELEASE_PLAN || process.env.GH_TOKEN;
+  if (!auth) return null;
+  return new Octokit({
+    auth,
+    userAgent: "release-plan-dashboard",
+    request: { timeout: 30000 },
+    retry: { enabled: true, retries: 2 },
+    throttle: { enabled: false },
   });
+}
+
+async function githubRequest(apiPath) {
+  const pat = process.env.GITHUB_PAT_RELEASE_PLAN || process.env.GH_TOKEN;
+  if (!pat) return null;
+  try {
+    const response = await fetch(`https://api.github.com${apiPath}`, {
+      headers: { Authorization: `token ${pat}`, Accept: "application/vnd.github+json", "User-Agent": "release-plan-dashboard" },
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!response.ok) {
+      console.warn(`GitHub ${apiPath} returned ${response.status}`);
+      return null;
+    }
+    return await response.json();
+  } catch (err) {
+    console.warn(`GitHub error ${apiPath}:`, err.message);
+    return null;
+  }
+}
+
+async function githubRequestWithToken(bearerToken, apiPath) {
+  if (!bearerToken) return null;
+  try {
+    const response = await fetch(`https://api.github.com${apiPath}`, {
+      headers: { Authorization: `Bearer ${bearerToken}`, Accept: "application/vnd.github+json", "User-Agent": "release-plan-dashboard" },
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!response.ok) {
+      console.warn(`GitHub ${apiPath} returned ${response.status}`);
+      return null;
+    }
+    return await response.json();
+  } catch (err) {
+    console.warn(`GitHub error ${apiPath}:`, err.message);
+    return null;
+  }
 }
 
 function parseGitHubPrUrl(url) {
@@ -69,29 +67,39 @@ function _extractPrStatus(data) {
   return data.state || "unknown";
 }
 
-async function getGitHubPrStatus(prUrl, token) {
+async function getGitHubPrStatus(prUrl) {
   const pr = parseGitHubPrUrl(prUrl);
   if (!pr) return null;
-  const fetchFn = token ? githubRequestWithToken : githubRequest;
-  const args = token ? [token, `/repos/${pr.owner}/${pr.repo}/pulls/${pr.number}`] : [`/repos/${pr.owner}/${pr.repo}/pulls/${pr.number}`];
-  const data = await fetchFn(...args);
-  return _extractPrStatus(data);
+  const octokit = getOctokit();
+  if (!octokit) return null;
+  try {
+    const { data } = await octokit.pulls.get({ owner: pr.owner, repo: pr.repo, pull_number: Number(pr.number) });
+    return _extractPrStatus(data);
+  } catch (err) {
+    console.warn(`GitHub PR status error ${prUrl}:`, err.message);
+    return null;
+  }
 }
 
-async function getGitHubPrDetails(prUrl, token) {
+async function getGitHubPrDetails(prUrl) {
   const pr = parseGitHubPrUrl(prUrl);
   if (!pr) return null;
-  const fetchFn = token ? githubRequestWithToken : githubRequest;
-  const args = (path) => token ? [token, path] : [path];
-  const [prData, reviews] = await Promise.all([
-    fetchFn(...args(`/repos/${pr.owner}/${pr.repo}/pulls/${pr.number}`)),
-    fetchFn(...args(`/repos/${pr.owner}/${pr.repo}/pulls/${pr.number}/reviews`)),
-  ]);
-  if (!prData) return null;
-  return _buildPrDetailsResult(prData, reviews, pr, token);
+  const octokit = getOctokit();
+  if (!octokit) return null;
+  try {
+    const [{ data: prData }, { data: reviews }] = await Promise.all([
+      octokit.pulls.get({ owner: pr.owner, repo: pr.repo, pull_number: Number(pr.number) }),
+      octokit.pulls.listReviews({ owner: pr.owner, repo: pr.repo, pull_number: Number(pr.number) }),
+    ]);
+    if (!prData) return null;
+    return _buildPrDetailsResult(prData, reviews, pr, octokit);
+  } catch (err) {
+    console.warn(`GitHub PR details error ${prUrl}:`, err.message);
+    return null;
+  }
 }
 
-async function _buildPrDetailsResult(prData, reviews, pr, bearerToken) {
+async function _buildPrDetailsResult(prData, reviews, pr, octokit) {
   const result = {
     mergeable: prData.mergeable || false, mergeableState: prData.mergeable_state || "",
     isApproved: false, approvedBy: [], failedChecks: [], apiViewUrl: "",
@@ -110,10 +118,7 @@ async function _buildPrDetailsResult(prData, reviews, pr, bearerToken) {
   const headSha = prData.head && prData.head.sha;
   if (headSha) {
     try {
-      const fetchFn = bearerToken
-        ? githubRequestWithToken(bearerToken, `/repos/${pr.owner}/${pr.repo}/commits/${headSha}/check-runs?per_page=100`)
-        : githubRequest(`/repos/${pr.owner}/${pr.repo}/commits/${headSha}/check-runs?per_page=100`);
-      const checks = await fetchFn;
+      const { data: checks } = await octokit.checks.listForRef({ owner: pr.owner, repo: pr.repo, ref: headSha, per_page: 100 });
       if (checks && Array.isArray(checks.check_runs)) {
         for (const cr of checks.check_runs) {
           if (cr.status === "completed" && cr.conclusion && !["success", "skipped", "neutral", "cancelled"].includes(cr.conclusion))
@@ -123,12 +128,9 @@ async function _buildPrDetailsResult(prData, reviews, pr, bearerToken) {
     } catch { /* ignore */ }
   }
 
-  // Extract APIView link from PR comments
+  // Extract APIView link and latest comment from PR comments
   try {
-    const fetchComments = bearerToken
-      ? githubRequestWithToken(bearerToken, `/repos/${pr.owner}/${pr.repo}/issues/${pr.number}/comments?per_page=100`)
-      : githubRequest(`/repos/${pr.owner}/${pr.repo}/issues/${pr.number}/comments?per_page=100`);
-    const comments = await fetchComments;
+    const { data: comments } = await octokit.issues.listComments({ owner: pr.owner, repo: pr.repo, issue_number: Number(pr.number), per_page: 100 });
     if (Array.isArray(comments)) {
       for (let i = comments.length - 1; i >= 0; i--) {
         const c = comments[i];
@@ -185,14 +187,17 @@ async function batchFetchPrDetails(urls) {
 async function getGitHubPrFiles(prUrl) {
   const pr = parseGitHubPrUrl(prUrl);
   if (!pr) return [];
-  let files = [];
-  for (let page = 1; page <= 3; page++) {
-    const data = await githubRequest(`/repos/${pr.owner}/${pr.repo}/pulls/${pr.number}/files?per_page=100&page=${page}`);
-    if (!data || !Array.isArray(data) || !data.length) break;
-    files.push(...data.map(f => f.filename));
-    if (data.length < 100) break;
+  const octokit = getOctokit();
+  if (!octokit) return [];
+  try {
+    const files = await octokit.paginate(octokit.pulls.listFiles, {
+      owner: pr.owner, repo: pr.repo, pull_number: Number(pr.number), per_page: 100,
+    }, response => response.data.map(f => f.filename));
+    return files;
+  } catch (err) {
+    console.warn(`GitHub PR files error ${prUrl}:`, err.message);
+    return [];
   }
-  return files;
 }
 
 function deriveSpecProjectPath(files) {
@@ -222,7 +227,7 @@ async function batchFetchSpecProjectPaths(urls) {
   return m;
 }
 
-module.exports = {
+export {
   githubRequest,
   githubRequestWithToken,
   parseGitHubPrUrl,

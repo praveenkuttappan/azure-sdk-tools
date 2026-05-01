@@ -1,17 +1,15 @@
-"use strict";
-
-const express = require("express");
+import express from "express";
 const router = express.Router();
 
-const { cache, evictOldest, CACHE_TTL_MS, PR_DETAIL_CACHE_TTL_MS } = require("../lib/cache");
-const { parseGitHubPrUrl, batchFetchPrStatuses, batchFetchPrDetails, batchFetchSpecProjectPaths } = require("../lib/github-api");
-const {
+import { cache, evictOldest, CACHE_TTL_MS, PR_DETAIL_CACHE_TTL_MS } from "../lib/cache.js";
+import { parseGitHubPrUrl, batchFetchPrStatuses, batchFetchPrDetails, batchFetchSpecProjectPaths } from "../lib/github-api.js";
+import {
   DEVOPS_ORG, DEVOPS_PROJECT, API_VERSION, LANGUAGES, LANGUAGE_DISPLAY, LANGUAGE_PACKAGE_WI,
   API_SPEC_FIELDS,
   devopsRequest, devopsRequestWithHeaders, runWiql, fetchWorkItemsBatch,
   extractChildIds, getField, mapReleasePlan,
   fetchPackageWorkItems, fetchAzureSdkPackageList, isKnownPackage, isGAVersion,
-} = require("../lib/devops-api");
+} from "../lib/devops-api.js";
 
 // ── Core data fetching and enrichment ─────────────────────────
 
@@ -403,4 +401,4 @@ router.post("/api/pr-details", async (req, res) => {
 // Expose refreshReleasePlansCache for startup use
 router.refreshReleasePlansCache = refreshReleasePlansCache;
 
-module.exports = router;
+export default router;

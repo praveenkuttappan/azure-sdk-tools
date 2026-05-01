@@ -1,4 +1,5 @@
-"use strict";
+import { describe, test, expect } from "vitest";
+import { mapReleasePlan, LANGUAGES, LANGUAGE_DISPLAY } from "../lib/devops-api.js";
 
 // Tests for package feed URL generation and version display logic.
 // The getPackageFeedUrl function is defined in public/app.js (client-side).
@@ -194,7 +195,6 @@ describe("getDisplayVersion (version display logic)", () => {
 
 describe("mapReleasePlan includes releasedVersion", () => {
   // Test that the devops-api mapReleasePlan correctly extracts ReleasedVersionFor<lang>
-  const { mapReleasePlan, LANGUAGES, LANGUAGE_DISPLAY } = require("../lib/devops-api");
 
   test("maps ReleasedVersionFor fields to releasedVersion", () => {
     const fields = {

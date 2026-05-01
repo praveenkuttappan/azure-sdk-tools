@@ -2,25 +2,23 @@
   "name": "release-plan-dashboard",
   "version": "1.0.0-dev.1",
   "description": "Dashboard for Azure DevOps Release Plan work items",
+  "type": "module",
   "main": "server.js",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "start": "node server.js",
-    "test": "jest --forceExit"
+    "test": "vitest run"
   },
   "dependencies": {
     "@azure/identity": "^4.5.0",
     "@azure/keyvault-keys": "^4.9.0",
-    "express": "^4.21.0",
+    "@octokit/rest": "^22.0.1",
+    "express": "^5.2.1",
     "express-session": "^1.19.0"
   },
   "devDependencies": {
-    "jest": "^30.3.0"
-  },
-  "jest": {
-    "testEnvironment": "node",
-    "testMatch": ["**/tests/**/*.test.js"]
+    "vitest": "^3.2.4"
   }
 }
