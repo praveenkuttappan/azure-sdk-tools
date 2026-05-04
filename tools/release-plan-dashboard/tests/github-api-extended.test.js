@@ -17,7 +17,7 @@ import * as githubApi from "../lib/github-api.js";
 // For now, we test the exported functions and their edge cases.
 
 describe("github-api additional tests", () => {
-  describe("githubRequest returns null without token", () => {
+  describe("no-token guard tests", () => {
     const originalPat = process.env.GITHUB_PAT_RELEASE_PLAN;
     const originalGhToken = process.env.GH_TOKEN;
 
@@ -29,11 +29,6 @@ describe("github-api additional tests", () => {
     afterAll(() => {
       if (originalPat) process.env.GITHUB_PAT_RELEASE_PLAN = originalPat;
       if (originalGhToken) process.env.GH_TOKEN = originalGhToken;
-    });
-
-    test("githubRequest resolves to null when no token is set", async () => {
-      const result = await githubApi.githubRequest("/repos/test/test/pulls/1");
-      expect(result).toBeNull();
     });
 
     test("batchFetchPrStatuses returns empty map when no token", async () => {
@@ -78,18 +73,6 @@ describe("github-api additional tests", () => {
   describe("getGitHubPrDetails with invalid URL", () => {
     test("returns null for invalid PR URL", async () => {
       const result = await githubApi.getGitHubPrDetails("not-a-url");
-      expect(result).toBeNull();
-    });
-  });
-
-  describe("githubRequestWithToken", () => {
-    test("returns null when no bearer token provided", async () => {
-      const result = await githubApi.githubRequestWithToken(null, "/test");
-      expect(result).toBeNull();
-    });
-
-    test("returns null when empty bearer token provided", async () => {
-      const result = await githubApi.githubRequestWithToken("", "/test");
       expect(result).toBeNull();
     });
   });

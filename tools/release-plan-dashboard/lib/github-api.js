@@ -24,42 +24,6 @@ function getOctokit(token) {
   });
 }
 
-async function githubRequest(apiPath) {
-  const pat = process.env.GITHUB_PAT_RELEASE_PLAN || process.env.GH_TOKEN;
-  if (!pat) return null;
-  try {
-    const response = await fetch(`https://api.github.com${apiPath}`, {
-      headers: { Authorization: `token ${pat}`, Accept: "application/vnd.github+json", "User-Agent": "release-plan-dashboard" },
-      signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
-    });
-    if (!response.ok) {
-      console.warn(`GitHub ${apiPath} returned ${response.status}`);
-      return null;
-    }
-    return await response.json();
-  } catch (err) {
-    console.warn(`GitHub error ${apiPath}:`, err.message);
-    return null;
-  }
-}
-
-async function githubRequestWithToken(bearerToken, apiPath) {
-  if (!bearerToken) return null;
-  try {
-    const response = await fetch(`https://api.github.com${apiPath}`, {
-      headers: { Authorization: `Bearer ${bearerToken}`, Accept: "application/vnd.github+json", "User-Agent": "release-plan-dashboard" },
-      signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
-    });
-    if (!response.ok) {
-      console.warn(`GitHub ${apiPath} returned ${response.status}`);
-      return null;
-    }
-    return await response.json();
-  } catch (err) {
-    console.warn(`GitHub error ${apiPath}:`, err.message);
-    return null;
-  }
-}
 
 /** Parses a GitHub PR URL into { owner, repo, number } or null if invalid. */
 function parseGitHubPrUrl(url) {
@@ -309,8 +273,6 @@ async function batchFetchSpecPrLabels(urls) {
 }
 
 export {
-  githubRequest,
-  githubRequestWithToken,
   parseGitHubPrUrl,
   getGitHubPrStatus,
   getGitHubPrDetails,
