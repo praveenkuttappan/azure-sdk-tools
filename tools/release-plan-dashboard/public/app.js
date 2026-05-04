@@ -1,7 +1,25 @@
 (function () {
   "use strict";
 
+  // ── Constants ───────────────────────────────────────────────
   const AUTO_REFRESH_INTERVAL = 60 * 60; // seconds (1 hour)
+  const RETRY_DELAY_MS = 5000;
+  const DEBOUNCE_DELAY_MS = 250;
+  const FINISHED_DISPLAY_LIMIT = 20;
+  const PR_STATUS_BATCH_SIZE = 10;
+  const RENDER_THROTTLE_MS = 500;
+  const COMMENT_MAX_LENGTH = 300;
+
+  // Action button types used in language table and popup content
+  const ACTION_TYPES = {
+    GENERATE: "generate",
+    FIX_CHECKS: "fix-checks",
+    RELEASE: "release",
+    MERGE: "merge",
+    LINK_PR: "link-pr",
+    MARK_READY: "mark-ready",
+  };
+
   let refreshCountdown = AUTO_REFRESH_INTERVAL;
   let countdownTimer = null;
   let allPlans = [];
@@ -24,8 +42,9 @@
     loading: true, loadingMessage: 'Loading release plans\u2026', error: '',
     showContent: false, showStatsBar: false,
     stats: { total: 0, inprogress: 0, partial: 0, new: 0, finished: 0, mgmt: 0, data: 0 },
+    prCount: '',
     user: { name: '', isPM: false },
-    filters: { search: '', plane: '', month: '' },
+    filters: { search: '', plane: '', month: '', prLang: '', prStatus: '' },
     prFilterVisible: false,
   }, {
     set(target, prop, value) {
@@ -133,7 +152,7 @@
       // Server is still warming up — show loading message and retry
       if (data.loading) {
         store().loadingMessage = "Release plans are being fetched. Dashboard will be available shortly\u2026";
-        setTimeout(fetchPlans, 5000);
+        setTimeout(fetchPlans, RETRY_DELAY_MS);
         return;
       }
 
@@ -298,7 +317,15 @@
     return rpt.includes("private");
   }
 
-  // ── Compute current step and action for a release plan ───────
+  /**
+   * Computes the current workflow step and who action is required from.
+   * Steps progress: API Spec → SDK Generation → SDK Review → Merge → Release.
+   * IMPORTANT: PR status priority is merged > closed > draft > state. Closed is checked
+   * before draft because GitHub keeps draft=true on closed draft PRs.
+   * Release status uses exact match === "released" (not .includes) because "Unreleased"
+   * contains "released".
+   * @returns {{ status: string, action: string, statusClass: string }}
+   */
   function computeCurrentStep(p) {
     const isPrivatePreview = isPrivatePreviewPlan(p);
     if (p.state === "Finished") {
@@ -310,7 +337,8 @@
     const apiReady = (p.apiReadiness || "").toLowerCase();
 
     // Step 1: API Spec checks
-    if (!specPrUrl) return { status: "API Spec Not Available", action: "Service Team", statusClass: "step-blocked" };
+    const serviceTeam = p.submittedBy ? `Service Team (${p.submittedBy})` : "Service Team";
+    if (!specPrUrl) return { status: "API Spec Not Available", action: serviceTeam, statusClass: "step-blocked" };
     if (apiReady !== "completed") return { status: "API Spec In Progress", action: "Spec PR Reviewer", statusClass: "step-inprogress" };
 
     // Private preview: no SDK stages — spec merged means done
@@ -327,11 +355,11 @@
       const gs = (langs[k].generationStatus || "").toLowerCase();
       return gs.includes("failed") || gs.includes("error");
     });
-    if (genFailed) return { status: "SDK Generation Failed", action: "Service Team", statusClass: "step-failed" };
+    if (genFailed) return { status: "SDK Generation Failed", action: serviceTeam, statusClass: "step-failed" };
 
     // Check if any SDK PRs exist
     const langsWithPr = activeLangs.filter(k => langs[k].sdkPrUrl);
-    if (!langsWithPr.length) return { status: "SDK To Be Generated", action: "Service Team", statusClass: "step-pending" };
+    if (!langsWithPr.length) return { status: "SDK To Be Generated", action: serviceTeam, statusClass: "step-pending" };
 
     // Check PR statuses (use GitHub status if available, fall back to DevOps)
     const prStatuses = langsWithPr.map(k => {
@@ -349,8 +377,8 @@
     const allReleased = releaseStatuses.every(s => s.includes("completed") || s.includes("released"));
 
     if (allMerged && allReleased) return { status: "Released", action: "", statusClass: "step-released" };
-    if (allMerged) return { status: "SDK Ready To Be Released", action: "Service Team", statusClass: "step-ready" };
-    if (allApproved) return { status: "SDK To Be Merged", action: "Service Team", statusClass: "step-pending" };
+    if (allMerged) return { status: "SDK Ready To Be Released", action: serviceTeam, statusClass: "step-ready" };
+    if (allApproved) return { status: "SDK To Be Merged", action: serviceTeam, statusClass: "step-pending" };
 
     // Some PRs not yet approved/merged
     return { status: "SDK Review In Progress", action: "SDK PR Reviewer", statusClass: "step-inprogress" };
@@ -569,7 +597,7 @@
         return rm.includes(thisMonthKey) || rm.includes(lastMonthKey);
       });
       recentFinished.sort(sortByReleaseMonth);
-      const cappedFinished = recentFinished.slice(0, 20);
+      const cappedFinished = recentFinished.slice(0, FINISHED_DISPLAY_LIMIT);
 
       return { inProgress, partial, newItems, finished: cappedFinished };
     }
@@ -646,14 +674,6 @@
     s.stats.data = data.length;
     s.showStatsBar = !singlePlan;
     s.showContent = true;
-
-    // Update plane total labels (still in DOM, not yet Alpine-managed)
-    const statMgmt = $("#stat-mgmt");
-    const statData = $("#stat-data");
-    if (statMgmt) statMgmt.textContent = `(${mgmt.length})`;
-    if (statData) statData.textContent = `(${data.length})`;
-
-    bindSectionHeaders();
   }
 
   function renderList(containerId, plans) {
@@ -664,129 +684,59 @@
       return;
     }
     container.innerHTML = plans.map(cardHTML).join("");
-    attachCardHandlers(container, plans);
+    storePlanDataOnCards(container, plans);
   }
 
-  function attachCardHandlers(container, plans) {
-    // Normalize: if container is itself a .plan-card (single card refresh), query from it directly
+  /** Refresh a single plan card when the refresh button is clicked. */
+  async function handlePlanRefresh(btn) {
+    const planId = btn.dataset.planId;
+    if (!planId || btn.disabled) return;
+    btn.disabled = true;
+    btn.classList.add("spinning");
+    try {
+      const resp = await fetch(`/api/refresh-plan/${planId}`, { method: "POST" });
+      const data = await resp.json();
+      if (data.plan) {
+        const idx = allPlans.findIndex(p => p.id === data.plan.id);
+        if (idx >= 0) allPlans[idx] = data.plan;
+        const card = btn.closest(".plan-card");
+        if (card) {
+          const wasOpen = card.querySelector(".card-details.open");
+          const tmp = document.createElement("div");
+          tmp.innerHTML = cardHTML(data.plan);
+          const newCard = tmp.firstElementChild;
+          card.replaceWith(newCard);
+          storePlanDataOnCards(newCard, allPlans);
+          if (wasOpen) {
+            const summary = newCard.querySelector(".card-summary");
+            const details = newCard.querySelector(".card-details");
+            if (summary && details) {
+              details.classList.add("open");
+              summary.classList.add("expanded");
+              summary.dataset.prLoaded = "1";
+              lazyLoadPrDetails(details, newCard);
+              lazyLoadPreviousSdkPrs(details, planId);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Refresh plan error:", err);
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove("spinning");
+    }
+  }
+
+  /** Store plan data references on card elements for lazy-load recomputation. */
+  function storePlanDataOnCards(container, plans) {
     const cards = container.classList && container.classList.contains("plan-card")
       ? [container]
       : [...container.querySelectorAll(".plan-card")];
-
-    // Store plan data references on cards for step recomputation
     cards.forEach((cardEl) => {
       const planId = parseInt(cardEl.dataset.planId, 10);
       const plan = plans.find(p => p.id === planId);
       if (plan) cardEl._planData = plan;
-    });
-    // Attach collapse/expand handlers for cards (with lazy PR detail loading)
-    container.querySelectorAll(".card-summary").forEach((el) => {
-      el.addEventListener("click", (e) => {
-        if (e.target.closest("a") || e.target.closest(".plan-refresh-btn") || e.target.closest(".plan-share-btn")) return;
-        const details = el.nextElementSibling;
-        const opening = !details.classList.contains("open");
-        details.classList.toggle("open");
-        el.classList.toggle("expanded");
-        if (opening && !el.dataset.prLoaded) {
-          el.dataset.prLoaded = "1";
-          const card = el.closest(".plan-card");
-          lazyLoadPrDetails(details, card);
-          if (card && card.dataset.planId) lazyLoadPreviousSdkPrs(details, card.dataset.planId);
-        }
-      });
-    });
-    // Attach product toggle handlers
-    container.querySelectorAll(".product-toggle").forEach((el) => {
-      el.addEventListener("click", (e) => {
-        if (e.target.closest("a")) return;
-        e.stopPropagation();
-        const details = el.nextElementSibling;
-        const caret = el.querySelector(".product-caret");
-        if (details.style.display === "none") {
-          details.style.display = "";
-          if (caret) caret.innerHTML = "&#9660;";
-        } else {
-          details.style.display = "none";
-          if (caret) caret.innerHTML = "&#9654;";
-        }
-      });
-    });
-    // Attach SDK details toggle handlers
-    container.querySelectorAll(".sdk-toggle").forEach((el) => {
-      el.addEventListener("click", (e) => {
-        if (e.target.closest("a")) return;
-        e.stopPropagation();
-        const content = el.nextElementSibling;
-        const caret = el.querySelector(".sdk-caret");
-        if (content.style.display === "none") {
-          content.style.display = "";
-          if (caret) caret.innerHTML = "&#9660;";
-        } else {
-          content.style.display = "none";
-          if (caret) caret.innerHTML = "&#9654;";
-        }
-      });
-    });
-    // Attach refresh button handlers
-    container.querySelectorAll(".plan-refresh-btn").forEach((btn) => {
-      btn.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        const planId = btn.dataset.planId;
-        if (!planId || btn.disabled) return;
-        btn.disabled = true;
-        btn.classList.add("spinning");
-        try {
-          const resp = await fetch(`/api/refresh-plan/${planId}`, { method: "POST" });
-          const data = await resp.json();
-          if (data.plan) {
-            // Update local plans array
-            const idx = allPlans.findIndex(p => p.id === data.plan.id);
-            if (idx >= 0) allPlans[idx] = data.plan;
-            // Re-render the card in-place
-            const card = btn.closest(".plan-card");
-            if (card) {
-              const wasOpen = card.querySelector(".card-details.open");
-              const tmp = document.createElement("div");
-              tmp.innerHTML = cardHTML(data.plan);
-              const newCard = tmp.firstElementChild;
-              card.replaceWith(newCard);
-              attachCardHandlers(newCard, allPlans);
-              if (wasOpen) {
-                const summary = newCard.querySelector(".card-summary");
-                const details = newCard.querySelector(".card-details");
-                if (summary && details) {
-                  details.classList.add("open");
-                  summary.classList.add("expanded");
-                  summary.dataset.prLoaded = "1";
-                  lazyLoadPrDetails(details, newCard);
-                  lazyLoadPreviousSdkPrs(details, planId);
-                }
-              }
-            }
-          }
-        } catch (err) {
-          console.error("Refresh plan error:", err);
-        } finally {
-          btn.disabled = false;
-          btn.classList.remove("spinning");
-        }
-      });
-    });
-    // Attach share button handlers
-    container.querySelectorAll(".plan-share-btn").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const planId = btn.dataset.planId;
-        if (!planId) return;
-        const shareUrl = `${window.location.origin}/?releasePlan=${encodeURIComponent(planId)}`;
-        const body = `
-          <p>Copy the link below to share this release plan:</p>
-          <div class="share-link-row">
-            <input type="text" class="share-link-input" value="${shareUrl.replace(/"/g, '&quot;')}" readonly onclick="this.select()" />
-            <button class="share-copy-btn" title="Copy to clipboard" onclick="navigator.clipboard.writeText(this.previousElementSibling.value).then(() => { this.textContent = '✅'; setTimeout(() => { this.textContent = '📋'; }, 1500); })">📋</button>
-          </div>`;
-        store().openModal("Share Release Plan", body);
-      });
     });
   }
 
@@ -814,6 +764,7 @@
     return "";
   }
 
+  /** Generates the HTML for a release plan card (collapsed summary + expandable detail). */
   function cardHTML(p, options) {
     const showPmAction = !!(options && options.showPmAction && currentUserIsPM);
     const pastDue = isPastDue(p);
@@ -894,20 +845,20 @@
     // Encode data attributes for the popup handler
     const attrs = `data-action-type="${esc(type)}" data-lang="${esc(lang)}" data-plan-id="${esc(planId)}" data-spec-path="${esc(specPath)}" data-pr-url="${esc(prUrl)}" data-pkg="${esc(pkg)}"`;
     const labels = {
-      "generate": "⚡ Generate SDK",
-      "fix-checks": "🔧 Fix Checks",
-      "release": "🚀 Release",
-      "merge": "✅ Merge PR",
-      "link-pr": "🔗 Link PR",
-      "mark-ready": "📋 Mark Ready",
+      [ACTION_TYPES.GENERATE]: "⚡ Generate SDK",
+      [ACTION_TYPES.FIX_CHECKS]: "🔧 Fix Checks",
+      [ACTION_TYPES.RELEASE]: "🚀 Release",
+      [ACTION_TYPES.MERGE]: "✅ Merge PR",
+      [ACTION_TYPES.LINK_PR]: "🔗 Link PR",
+      [ACTION_TYPES.MARK_READY]: "📋 Mark Ready",
     };
     const classes = {
-      "generate": "action-btn-generate",
-      "fix-checks": "action-btn-fix",
-      "release": "action-btn-release",
-      "merge": "action-btn-merge",
-      "link-pr": "action-btn-link",
-      "mark-ready": "action-btn-ready",
+      [ACTION_TYPES.GENERATE]: "action-btn-generate",
+      [ACTION_TYPES.FIX_CHECKS]: "action-btn-fix",
+      [ACTION_TYPES.RELEASE]: "action-btn-release",
+      [ACTION_TYPES.MERGE]: "action-btn-merge",
+      [ACTION_TYPES.LINK_PR]: "action-btn-link",
+      [ACTION_TYPES.MARK_READY]: "action-btn-ready",
     };
     return `<button class="lang-action-btn ${classes[type] || ""}" ${attrs}>${labels[type] || type}</button>`;
   }
@@ -930,7 +881,7 @@
       : '<p style="font-size:.82rem;color:#605e5c;margin-top:8px;">Clone the relevant SDK repo and open Copilot CLI or VS Code from the repo root.</p>';
 
     switch (type) {
-      case "generate":
+      case ACTION_TYPES.GENERATE:
         title = `Generate SDK for ${lang}`;
         body = `<p>The SDK pull request has not been generated for <strong>${esc(lang)}</strong> yet.</p>
           <p>Use the ${agentLink} to generate the SDK:</p>
@@ -938,7 +889,7 @@
           <div class="guide-prompt"><code>Generate ${esc(lang)} SDK${pkg ? ` for package ${esc(pkg)}` : ""}${specPath ? ` for TypeSpec project ${esc(specPath)}` : ""} for release plan ${esc(planId)}</code></div>
           ${specPath ? `<p style="font-size:.82rem;color:#605e5c;">TypeSpec path: <code>${esc(specPath)}</code></p>` : ""}`;
         break;
-      case "fix-checks":
+      case ACTION_TYPES.FIX_CHECKS:
         title = `Fix Check Failures — ${lang}${pkg ? ` (${pkg})` : ""}`;
         body = `<p>The SDK pull request for <strong>${esc(lang)}</strong>${pkg ? ` package <code>${esc(pkg)}</code>` : ""} has failing CI checks.</p>
           <p>Use the ${agentLink} to diagnose and fix the failures:</p>
@@ -946,20 +897,20 @@
           <div class="guide-prompt"><code>Fix CI check failures on ${esc(lang)} SDK pull request ${esc(prUrl)}${pkg ? ` for package ${esc(pkg)}` : ""}</code></div>
           <p style="margin-top:8px;">Alternatively, clone the repo locally, checkout the PR branch, and run the build/tests to identify and fix the issues.</p>`;
         break;
-      case "release":
+      case ACTION_TYPES.RELEASE:
         title = `Release ${lang} Package${pkg ? ` — ${pkg}` : ""}`;
         body = `<p>The SDK pull request for <strong>${esc(lang)}</strong>${pkg ? ` package <code>${esc(pkg)}</code>` : ""} has been merged. The package is ready to be released.</p>
           <p>Use the ${agentLink} to trigger the release:</p>
           <div class="guide-prompt"><code>Release ${esc(lang)} SDK package${pkg ? ` ${esc(pkg)}` : ""} for release plan ${esc(planId)}</code></div>
           <p style="font-size:.82rem;color:#605e5c;margin-top:8px;">This will trigger the release pipeline for the package.</p>`;
         break;
-      case "merge":
+      case ACTION_TYPES.MERGE:
         title = `Merge PR — ${lang}${pkg ? ` (${pkg})` : ""}`;
         body = `<p>The SDK pull request for <strong>${esc(lang)}</strong>${pkg ? ` package <code>${esc(pkg)}</code>` : ""} is approved and all checks are passing. It is ready to be merged.</p>
           <p><a href="${esc(prUrl)}" target="_blank" rel="noopener">Open the PR on GitHub</a> and merge it, or use the ${agentLink}:</p>
           <div class="guide-prompt"><code>Merge ${esc(lang)} SDK pull request ${esc(prUrl)}</code></div>`;
         break;
-      case "link-pr":
+      case ACTION_TYPES.LINK_PR:
         title = `Link SDK PR — ${lang}${pkg ? ` (${pkg})` : ""}`;
         body = `<p>The SDK pull request for <strong>${esc(lang)}</strong>${pkg ? ` package <code>${esc(pkg)}</code>` : ""} is <strong>closed</strong> without being merged.</p>
           <p><strong>Steps:</strong></p>
@@ -975,7 +926,7 @@
           <p><strong>To generate a new PR instead:</strong></p>
           <div class="guide-prompt"><code>Generate ${esc(lang)} SDK${pkg ? ` for package ${esc(pkg)}` : ""} for release plan ${esc(planId)}</code></div>`;
         break;
-      case "mark-ready":
+      case ACTION_TYPES.MARK_READY:
         title = `Mark PR Ready for Review — ${lang}${pkg ? ` (${pkg})` : ""}`;
         body = `<p>The SDK pull request for <strong>${esc(lang)}</strong>${pkg ? ` package <code>${esc(pkg)}</code>` : ""} is currently in <strong>draft</strong> status. It needs to be marked as ready for review so that the SDK team can review and merge it.</p>
           <p><strong>Steps:</strong></p>
@@ -989,7 +940,7 @@
     return { title, body };
   }
 
-  // ── Action Required guidance ─────────────────────────────────
+  /** Generates the "Action Required" guidance section with step-by-step instructions. */
   function actionRequiredHTML(p) {
     const step = computeCurrentStep(p);
     const isTerminal = step.status === "Released" || step.status === "Completed";
@@ -1167,7 +1118,7 @@
           step.status === "SDK Ready To Be Released") {
         needsServiceTeam = true;
       }
-      if (needsServiceTeam) actionFrom.push("Service Team");
+      if (needsServiceTeam) actionFrom.push(p.submittedBy ? `Service Team (${p.submittedBy})` : "Service Team");
       if (needsReviewTeam) actionFrom.push("SDK PR Reviewer");
     }
     const actionFromHTML = actionFrom.length
@@ -1310,6 +1261,7 @@
     return `<div class="stage-bar">${items}</div>`;
   }
 
+  /** Generates the expanded detail HTML for a release plan card (stages, metadata, language table). */
   function detailHTML(p, options) {
     const showPmAction = !!(options && options.showPmAction);
     const specPath = p.specProjectPath || p.typeSpecPath || "";
@@ -1444,17 +1396,17 @@
             const isMergeable = l.prDetails && l.prDetails.mergeable && l.prDetails.mergeableState === "clean";
 
             if (!hasPr) {
-              actionCell = langActionBtn("generate", lang, p, l);
+              actionCell = langActionBtn(ACTION_TYPES.GENERATE, lang, p, l);
             } else if (isClosed && !isMerged) {
-              actionCell = langActionBtn("link-pr", lang, p, l);
+              actionCell = langActionBtn(ACTION_TYPES.LINK_PR, lang, p, l);
             } else if (isDraft && !relSt.includes("released")) {
-              actionCell = langActionBtn("mark-ready", lang, p, l);
+              actionCell = langActionBtn(ACTION_TYPES.MARK_READY, lang, p, l);
             } else if (isOpen && hasFailedChecks) {
-              actionCell = langActionBtn("fix-checks", lang, p, l);
+              actionCell = langActionBtn(ACTION_TYPES.FIX_CHECKS, lang, p, l);
             } else if (isMerged && !relSt.includes("released")) {
-              actionCell = langActionBtn("release", lang, p, l);
+              actionCell = langActionBtn(ACTION_TYPES.RELEASE, lang, p, l);
             } else if (isOpen && isApproved && isMergeable) {
-              actionCell = langActionBtn("merge", lang, p, l);
+              actionCell = langActionBtn(ACTION_TYPES.MERGE, lang, p, l);
             }
           }
 
@@ -1503,6 +1455,15 @@
       }
       if (specItems.length) {
         html += `<div class="detail-meta-row">${specItems.join("")}</div>`;
+      }
+      // Spec PR labels — shown on a separate wrapping row
+      if (p.specPrLabels && p.specPrLabels.length) {
+        const labelPills = p.specPrLabels.map(label => {
+          const bg = label.color ? `#${esc(label.color)}` : "#e1e4e8";
+          const textColor = label.color ? contrastTextColor(label.color) : "#24292e";
+          return `<span class="spec-pr-label" style="background:${bg};color:${textColor}">${esc(label.name)}</span>`;
+        }).join(" ");
+        html += `<div class="detail-meta-row spec-pr-labels-row"><strong>Spec PR Labels:</strong> ${labelPills}</div>`;
       }
       // Previous spec PRs (collapsible, separate line)
       if (p.apiSpec && p.apiSpec.previousSpecPrUrls && p.apiSpec.previousSpecPrUrls.length) {
@@ -1719,6 +1680,18 @@
     return el.innerHTML;
   }
 
+  /** Returns "#000" or "#fff" for readable text on a given hex background color. */
+  function contrastTextColor(hexColor) {
+    const hex = hexColor.replace(/^#/, "");
+    if (hex.length < 6) return "#000";
+    const r = parseInt(hex.substring(0, 2), 16);
+    const g = parseInt(hex.substring(2, 4), 16);
+    const b = parseInt(hex.substring(4, 6), 16);
+    // W3C perceived brightness formula
+    const luminance = (r * 299 + g * 587 + b * 114) / 1000;
+    return luminance > 128 ? "#000" : "#fff";
+  }
+
   function showLoading(show, message) {
     store().loading = show;
     if (message) store().loadingMessage = message;
@@ -1778,36 +1751,113 @@
     }
   }
 
-  // Bind click handlers directly to each section header
-  function bindSectionHeaders() {
-    document.querySelectorAll(".section-header").forEach((header) => {
-      // Avoid binding twice
-      if (header.dataset.bound) return;
-      header.dataset.bound = "1";
-      header.addEventListener("click", (e) => {
-        e.stopPropagation();
-        toggleSection(header);
-      });
-    });
-  }
-
-  // Also use event delegation as a fallback
+  // ── Global event delegation ─────────────────────────────────
+  // Single document-level handler replaces per-card listener attachment.
+  // Each handler checks its closest matching ancestor and delegates.
   document.addEventListener("click", (e) => {
+    // Ignore clicks on links
+    if (e.target.closest("a")) return;
+
+    // Section header collapse/expand
     const header = e.target.closest(".section-header");
     if (header) { toggleSection(header); return; }
 
-    // Per-language action button handler
+    // Per-language action button → open modal with instructions
     const actionBtn = e.target.closest(".lang-action-btn");
     if (actionBtn) {
       e.stopPropagation();
-      const type = actionBtn.dataset.actionType;
-      const lang = actionBtn.dataset.lang;
-      const planId = actionBtn.dataset.planId;
-      const specPath = actionBtn.dataset.specPath;
-      const prUrl = actionBtn.dataset.prUrl;
-      const pkg = actionBtn.dataset.pkg;
-      const { title, body } = buildActionPopupContent(type, lang, planId, specPath, prUrl, pkg);
+      const { actionType, lang, planId, specPath, prUrl, pkg } = actionBtn.dataset;
+      const { title, body } = buildActionPopupContent(actionType, lang, planId, specPath, prUrl, pkg);
       store().openModal(title, body);
+      return;
+    }
+
+    // Share button → open share modal
+    const shareBtn = e.target.closest(".plan-share-btn");
+    if (shareBtn) {
+      e.stopPropagation();
+      const planId = shareBtn.dataset.planId;
+      if (!planId) return;
+      const shareUrl = `${window.location.origin}/?releasePlan=${encodeURIComponent(planId)}`;
+      const body = `
+        <p>Copy the link below to share this release plan:</p>
+        <div class="share-link-row">
+          <input type="text" class="share-link-input" value="${shareUrl.replace(/"/g, '&quot;')}" readonly onclick="this.select()" />
+          <button class="share-copy-btn" title="Copy to clipboard" onclick="navigator.clipboard.writeText(this.previousElementSibling.value).then(() => { this.textContent = '✅'; setTimeout(() => { this.textContent = '📋'; }, 1500); })">📋</button>
+        </div>`;
+      store().openModal("Share Release Plan", body);
+      return;
+    }
+
+    // Refresh button → reload single plan from server
+    const refreshBtn = e.target.closest(".plan-refresh-btn");
+    if (refreshBtn) {
+      e.stopPropagation();
+      handlePlanRefresh(refreshBtn);
+      return;
+    }
+
+    // Product details toggle (collapsible product section inside card)
+    const productToggle = e.target.closest(".product-toggle");
+    if (productToggle) {
+      e.stopPropagation();
+      const details = productToggle.nextElementSibling;
+      const caret = productToggle.querySelector(".product-caret");
+      if (details.style.display === "none") {
+        details.style.display = "";
+        if (caret) caret.innerHTML = "&#9660;";
+      } else {
+        details.style.display = "none";
+        if (caret) caret.innerHTML = "&#9654;";
+      }
+      return;
+    }
+
+    // SDK details toggle (collapsible SDK table inside card)
+    const sdkToggle = e.target.closest(".sdk-toggle");
+    if (sdkToggle) {
+      e.stopPropagation();
+      const content = sdkToggle.nextElementSibling;
+      const caret = sdkToggle.querySelector(".sdk-caret");
+      if (content.style.display === "none") {
+        content.style.display = "";
+        if (caret) caret.innerHTML = "&#9660;";
+      } else {
+        content.style.display = "none";
+        if (caret) caret.innerHTML = "&#9654;";
+      }
+      return;
+    }
+
+    // Release plan card expand/collapse (lazy-loads PR details on first open)
+    const cardSummary = e.target.closest(".card-summary");
+    if (cardSummary) {
+      const details = cardSummary.nextElementSibling;
+      const opening = !details.classList.contains("open");
+      details.classList.toggle("open");
+      cardSummary.classList.toggle("expanded");
+      if (opening && !cardSummary.dataset.prLoaded) {
+        cardSummary.dataset.prLoaded = "1";
+        const card = cardSummary.closest(".plan-card");
+        lazyLoadPrDetails(details, card);
+        if (card && card.dataset.planId) lazyLoadPreviousSdkPrs(details, card.dataset.planId);
+      }
+      return;
+    }
+
+    // PR tab card expand/collapse (lazy-loads PR details on first open)
+    const prSummary = e.target.closest(".pr-card-summary");
+    if (prSummary) {
+      const details = prSummary.nextElementSibling;
+      const opening = !details.classList.contains("open");
+      details.classList.toggle("open");
+      prSummary.classList.toggle("expanded");
+      if (opening && !prSummary.dataset.prLoaded) {
+        prSummary.dataset.prLoaded = "1";
+        const card = prSummary.closest(".pr-card");
+        lazyLoadPrCardDetails(card);
+      }
+      return;
     }
   });
 
@@ -1824,6 +1874,8 @@
       const _search = store().filters.search;
       const _plane = store().filters.plane;
       const _month = store().filters.month;
+      const _prLang = store().filters.prLang;
+      const _prStatus = store().filters.prStatus;
       // Skip re-render if plans not loaded yet
       if (!allPlans.length) return;
       // Debounce render to avoid excessive re-renders
@@ -1852,7 +1904,7 @@
               .catch(() => {});
           }
         }
-      }, 250);
+      }, DEBOUNCE_DELAY_MS);
     });
   });
 
@@ -2024,7 +2076,7 @@
       return;
     }
     el.innerHTML = plans.map(p => cardHTML(p, { showPmAction: true })).join("");
-    attachCardHandlers(el, plans);
+    storePlanDataOnCards(el, plans);
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -2073,7 +2125,7 @@
         prs.push({
           prUrl: l.sdkPrUrl, language: lang, packageName: l.packageName || "",
           releasePlanId: p.releasePlanId || "", planTitle: p.title || "", planId: p.id,
-          plane: classifyPlane(p),
+          plane: classifyPlane(p), submittedBy: p.submittedBy || "",
           releaseMonth: p.releaseMonth || "", releaseMonthDate: parseReleaseMonth(p.releaseMonth),
           prStatus: l.sdkPrGitHubStatus || l.prStatus || "", releaseStatus: l.releaseStatus || "",
           repo, prNumber, prDetails: l.prDetails || null, _statusLoaded: false,
@@ -2096,7 +2148,6 @@
 
     const prLoading = document.getElementById("pr-loading");
     const prList = document.getElementById("pr-list");
-    const countEl = document.getElementById("pr-count");
     if (prLoading) { prLoading.style.display = ""; prLoading.querySelector("p").textContent = `Fetching PR statuses (0/${candidates.length})…`; }
     if (prList) prList.innerHTML = "";
 
@@ -2105,7 +2156,7 @@
     const statusCache = new Map(); // url -> status string
 
     // Fetch in small batches of 10, throttle re-renders to every 500ms
-    const BATCH = 10;
+    const BATCH = PR_STATUS_BATCH_SIZE;
     let fetched = 0;
     let lastRender = 0;
     let needsRender = false;
@@ -2147,7 +2198,7 @@
       }
       // Throttle re-renders to at most every 500ms
       const now = Date.now();
-      if (needsRender && (now - lastRender > 500)) {
+      if (needsRender && (now - lastRender > RENDER_THROTTLE_MS)) {
         renderFilteredPRs();
         lastRender = now;
         needsRender = false;
@@ -2172,8 +2223,8 @@
 
 
   function filterPRs(prs) {
-    const langFilter = (document.getElementById("pr-filter-lang") || {}).value || "";
-    const statusFilter = (document.getElementById("pr-filter-status") || {}).value || "";
+    const langFilter = store().filters.prLang || "";
+    const statusFilter = store().filters.prStatus || "";
     const textFilter = store().filters.search.toLowerCase();
     const planeFilter = getGlobalPlaneFilter();
 
@@ -2272,14 +2323,17 @@
       if (d.apiViewUrl) {
         html += `<div class="pr-detail-row"><strong>APIView:</strong> <a href="${esc(d.apiViewUrl)}" target="_blank" rel="noopener">View API Changes</a></div>`;
       }
-      // Action required — only for open/draft or closed PRs, not merged
+      // Action required — context-specific guidance for the PR tab
+      const serviceTeamLabel = pr.submittedBy ? `Service Team (${esc(pr.submittedBy)})` : "Service Team";
       if (!prIsMerged) {
         if (prIsOpenOrDraft && d.failedChecks && d.failedChecks.length) {
-          html += `<div class="action-required-section" style="margin-top:10px;"><h4>⚡ Action Required</h4><div class="action-from-label">Action required from: <strong>Service Team</strong></div><div class="action-item action-item-warning"><strong>Fix check failures:</strong> Clone the repo, checkout the PR, and use the <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">Azure SDK Tools agent</a> to resolve build errors.</div></div>`;
+          html += `<div class="action-required-section" style="margin-top:10px;"><h4>⚡ Action Required</h4><div class="action-from-label">Action required from: <strong>${serviceTeamLabel}</strong></div><div class="action-item action-item-warning"><strong>Fix check failures:</strong> Clone the repo, checkout the PR, and use the <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">Azure SDK Tools agent</a> to resolve build errors.</div></div>`;
         } else if (prIsClosed) {
-          html += `<div class="action-required-section" style="margin-top:10px;"><h4>⚡ Action Required</h4><div class="action-from-label">Action required from: <strong>Service Team</strong></div><div class="action-item action-item-warning"><strong>PR Closed:</strong> Regenerate the SDK or link a different PR to the release plan.</div></div>`;
-        } else if (prIsOpenOrDraft && !d.isApproved) {
-          html += `<div class="action-required-section" style="margin-top:10px;"><h4>⚡ Action Required</h4><div class="action-from-label">Action required from: <strong>SDK PR Reviewer</strong></div><div class="action-item"><strong>Review needed:</strong> This PR is awaiting review.</div></div>`;
+          html += `<div class="action-required-section" style="margin-top:10px;"><h4>⚡ Action Required</h4><div class="action-from-label">Action required from: <strong>${serviceTeamLabel}</strong></div><div class="action-item action-item-warning"><strong>PR Closed:</strong> Regenerate the SDK or link a different PR to the release plan.</div></div>`;
+        } else if (st === "draft") {
+          html += `<div class="action-required-section" style="margin-top:10px;"><h4>⚡ Action Required</h4><div class="action-from-label">Action required from: <strong>${serviceTeamLabel}</strong></div><div class="action-item"><strong>Mark as ready for review:</strong> This PR is in draft status. Mark it as ready for review when the SDK changes are complete.</div></div>`;
+        } else if (d.isApproved && st === "open") {
+          html += `<div class="action-required-section" style="margin-top:10px;"><h4>⚡ Action Required</h4><div class="action-from-label">Action required from: <strong>${serviceTeamLabel}</strong></div><div class="action-item"><strong>Merge the SDK pull request:</strong> This PR has been approved by the SDK team. <a href="${esc(pr.prUrl)}" target="_blank" rel="noopener">Open the PR on GitHub</a> and merge it, or use the <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">Azure SDK Tools agent</a>:<div class="action-prompt"><code>Merge ${esc(pr.language)} SDK pull request ${esc(pr.prUrl)}</code></div></div></div>`;
         }
       }
       // Latest comment
@@ -2301,10 +2355,7 @@
     });
 
     const filtered = filterPRs(allPRs);
-    const countEl = document.getElementById("pr-count");
-    if (countEl) {
-      countEl.textContent = `${filtered.length} of ${allPRs.length} PRs`;
-    }
+    store().prCount = `${filtered.length} of ${allPRs.length} PRs`;
 
     const container = document.getElementById("pr-list");
     if (!filtered.length) {
@@ -2313,23 +2364,7 @@
     }
     container.innerHTML = filtered.map(prCardHTML).join("");
 
-    // Attach expand/collapse handlers
-    container.querySelectorAll(".pr-card-summary").forEach(el => {
-      el.addEventListener("click", (e) => {
-        if (e.target.closest("a")) return;
-        const details = el.nextElementSibling;
-        const opening = !details.classList.contains("open");
-        details.classList.toggle("open");
-        el.classList.toggle("expanded");
-        if (opening && !el.dataset.prLoaded) {
-          el.dataset.prLoaded = "1";
-          const card = el.closest(".pr-card");
-          lazyLoadPrCardDetails(card);
-        }
-      });
-    });
-
-    // Restore expanded cards
+    // Restore expanded cards (handlers are managed via document-level event delegation)
     if (prExpandedUrls.size) {
       container.querySelectorAll(".pr-card").forEach(card => {
         if (prExpandedUrls.has(card.dataset.prUrl)) {
@@ -2381,17 +2416,32 @@
         if (info.prDetails) pr.prDetails = info.prDetails;
       }
       detailsEl.innerHTML = prDetailHTML(pr, info);
+
+      // Update card summary badges with newly loaded data
+      const summaryEl = cardEl.querySelector(".pr-card-summary");
+      if (summaryEl) {
+        const metaEl = summaryEl.querySelector(".pr-card-meta");
+        if (metaEl) {
+          // Update status badge
+          const existingBadge = metaEl.querySelector(".badge");
+          if (existingBadge && info && info.gitHubStatus) {
+            existingBadge.outerHTML = prStatusBadge(info.gitHubStatus);
+          }
+          // Add or remove "Approved" label
+          const existingApproved = metaEl.querySelector(".pr-label-approved");
+          if (pr.prDetails && pr.prDetails.isApproved && !existingApproved) {
+            const statusEl = metaEl.querySelector(".badge");
+            if (statusEl) statusEl.insertAdjacentHTML("afterend", ' <span class="pr-label pr-label-approved">Approved</span>');
+          } else if (existingApproved && !(pr.prDetails && pr.prDetails.isApproved)) {
+            existingApproved.remove();
+          }
+        }
+      }
     } catch (err) {
       console.warn("Failed to load PR card details:", err);
       detailsEl.innerHTML = '<div class="pr-detail-loading" style="color:var(--red);">Error loading details.</div>';
     }
   }
-
-  // PR tab dropdown filter listeners
-  ["pr-filter-lang", "pr-filter-status"].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.addEventListener("change", () => renderFilteredPRs());
-  });
 
   // ── Init ────────────────────────────────────────────────────
   fetchPlans();

@@ -16,8 +16,12 @@ vi.mock("../lib/devops-api.js", async () => {
   const original = await vi.importActual("../lib/devops-api.js");
   return {
     ...original,
-    devopsRequest: vi.fn().mockResolvedValue({ workItems: [], value: [] }),
-    devopsRequestWithHeaders: vi.fn().mockResolvedValue({ body: { value: [] }, headers: {} }),
+    devopsRequest: vi.fn().mockImplementation((url, method, body, options) => {
+      if (options && options.returnHeaders) {
+        return Promise.resolve({ body: { value: [] }, headers: {} });
+      }
+      return Promise.resolve({ workItems: [], value: [] });
+    }),
     runWiql: vi.fn().mockResolvedValue([]),
     fetchWorkItemsBatch: vi.fn().mockResolvedValue([]),
     fetchPackageWorkItems: vi.fn().mockResolvedValue(new Map()),

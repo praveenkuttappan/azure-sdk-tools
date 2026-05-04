@@ -41,7 +41,11 @@ const GITHUB_CLIENT_SECRET = process.env.GITHUB_APP_CLIENT_SECRET;
 
 const REQUIRED_ORGS = ["microsoft", "Azure"];
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
-const PORT = process.env.PORT || 3000;
+const DEFAULT_PORT = 3000;
+const PORT = process.env.PORT || DEFAULT_PORT;
+const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
+const RATE_LIMIT_MAX_REQUESTS = 30;
 
 // ── App setup ─────────────────────────────────────────────────
 const app = express();
@@ -52,7 +56,7 @@ app.set("trust proxy", 1);
 // Session
 app.use(session({
   secret: SESSION_SECRET, resave: false, saveUninitialized: false,
-  cookie: { secure: process.env.NODE_ENV === "production", httpOnly: true, sameSite: "lax", maxAge: 24 * 60 * 60 * 1000 },
+  cookie: { secure: process.env.NODE_ENV === "production", httpOnly: true, sameSite: "lax", maxAge: SESSION_MAX_AGE_MS },
 }));
 app.use(express.json());
 
@@ -62,8 +66,10 @@ app.get("/health", (req, res) => {
 });
 
 // ── Authentication middleware ─────────────────────────────────
+const PUBLIC_ROUTES = ["/auth/github", "/auth/github/callback", "/auth/logout", "/login", "/health", "/favicon.ico"];
+
 function requireAuth(req, res, next) {
-  if (["/auth/github", "/auth/github/callback", "/auth/logout", "/login", "/health", "/favicon.ico"].includes(req.path)) return next();
+  if (PUBLIC_ROUTES.includes(req.path)) return next();
   if (req.session && req.session.user) return next();
   if (req.session) req.session.returnTo = req.originalUrl;
   res.redirect("/login");
@@ -125,7 +131,7 @@ app.get("/auth/me", (req, res) => {
 });
 
 // ── Rate limiting for API endpoints ───────────────────────────
-const apiRateLimiter = createRateLimiter({ windowMs: 60 * 1000, maxRequests: 30 });
+const apiRateLimiter = createRateLimiter({ windowMs: RATE_LIMIT_WINDOW_MS, maxRequests: RATE_LIMIT_MAX_REQUESTS });
 app.use("/api", apiRateLimiter);
 
 // ── API routes ────────────────────────────────────────────────

@@ -8,7 +8,13 @@ const DEVOPS_ORG = "https://dev.azure.com/azure-sdk";
 const DEVOPS_PROJECT = "Release";
 const API_VERSION = "7.1";
 const BATCH_SIZE = 200;
+const WIQL_BATCH_SIZE = 50;
 const DEVOPS_SCOPE = "499b84ac-1321-427f-aa17-267ca6975798/.default"; // Azure DevOps resource ID
+const HIERARCHY_FORWARD_LINK = "System.LinkTypes.Hierarchy-Forward";
+const WORK_ITEM_ID_REGEX = /\/workItems\/(\d+)$/;
+const GITHUB_PR_URL_PATTERN = /github\.com\/.*\/pull\/\d+/;
+const HREF_REGEX = /href="([^"]+)"/g;
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const credential = new DefaultAzureCredential();
 
@@ -47,48 +53,46 @@ const PACKAGE_FIELDS = [
   "Custom.PackageVersion", "Custom.APIReviewStatus", "Custom.PackageNameApprovalStatus",
 ];
 
+/** Fetches an Azure DevOps auth header using Managed Identity (DefaultAzureCredential). */
 async function getAuthHeader() {
   const tokenResponse = await credential.getToken(DEVOPS_SCOPE);
   return "Bearer " + tokenResponse.token;
 }
 
-async function devopsRequest(urlPath, method, body) {
+/**
+ * Makes an authenticated request to Azure DevOps.
+ * @param {string} urlPath - Full API URL
+ * @param {string} [method="GET"] - HTTP method
+ * @param {object} [body] - Request body (will be JSON-serialized)
+ * @param {{ returnHeaders?: boolean }} [options] - If returnHeaders is true, returns { body, headers }
+ */
+async function devopsRequest(urlPath, method, body, options) {
   const authHeader = await getAuthHeader();
-  const options = {
+  const fetchOptions = {
     method: method || "GET",
     headers: { Authorization: authHeader, "Content-Type": "application/json", Accept: "application/json" },
   };
-  if (body) options.body = JSON.stringify(body);
-  const response = await fetch(urlPath, options);
+  if (body) fetchOptions.body = JSON.stringify(body);
+  const response = await fetch(urlPath, fetchOptions);
   const text = await response.text();
-  if (response.ok) {
-    try { return JSON.parse(text); } catch { return text; }
+  if (!response.ok) {
+    throw new Error(`DevOps ${response.status}: ${text.substring(0, 500)}`);
   }
-  throw new Error(`DevOps ${response.status}: ${text.substring(0, 500)}`);
+  const parsed = (() => { try { return JSON.parse(text); } catch { return text; } })();
+  if (options && options.returnHeaders) {
+    return { body: parsed, headers: Object.fromEntries(response.headers.entries()) };
+  }
+  return parsed;
 }
 
-async function devopsRequestWithHeaders(urlPath, method, body) {
-  const authHeader = await getAuthHeader();
-  const options = {
-    method: method || "GET",
-    headers: { Authorization: authHeader, "Content-Type": "application/json", Accept: "application/json" },
-  };
-  if (body) options.body = JSON.stringify(body);
-  const response = await fetch(urlPath, options);
-  const text = await response.text();
-  if (response.ok) {
-    const headers = Object.fromEntries(response.headers.entries());
-    try { return { body: JSON.parse(text), headers }; } catch { return { body: text, headers }; }
-  }
-  throw new Error(`DevOps ${response.status}: ${text.substring(0, 500)}`);
-}
-
+/** Executes a WIQL query and returns matching work item IDs. */
 async function runWiql(query) {
   const url = `${DEVOPS_ORG}/${DEVOPS_PROJECT}/_apis/wit/wiql?api-version=${API_VERSION}`;
   const result = await devopsRequest(url, "POST", { query });
   return result.workItems ? result.workItems.map(wi => wi.id) : [];
 }
 
+/** Fetches work items by IDs in batches of BATCH_SIZE, with optional field selection. */
 async function fetchWorkItemsBatch(ids, fields) {
   if (!ids.length) return [];
   const allItems = [];
@@ -103,12 +107,13 @@ async function fetchWorkItemsBatch(ids, fields) {
   return allItems;
 }
 
+/** Extracts child work item IDs from hierarchy-forward relations. */
 function extractChildIds(workItem) {
   const ids = [];
   if (workItem.relations) {
-    for (const rel of workItem.relations) {
-      if (rel.rel === "System.LinkTypes.Hierarchy-Forward" && rel.url) {
-        const match = rel.url.match(/\/workItems\/(\d+)$/);
+    for (const relation of workItem.relations) {
+      if (relation.rel === HIERARCHY_FORWARD_LINK && relation.url) {
+        const match = relation.url.match(WORK_ITEM_ID_REGEX);
         if (match) ids.push(parseInt(match[1], 10));
       }
     }
@@ -118,15 +123,33 @@ function extractChildIds(workItem) {
 
 function getField(workItem, name) { return workItem.fields ? workItem.fields[name] : undefined; }
 
+/** Strips email addresses and normalizes display names from DevOps identity fields. */
 function stripEmail(val) {
   if (!val) return "";
   let cleaned = val.replace(/<[^>]*@[^>]*>/g, "").trim();
-  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleaned)) {
+  if (EMAIL_REGEX.test(cleaned)) {
     return cleaned.split("@")[0].replace(/[._]/g, " ");
   }
   return cleaned;
 }
 
+/** Extracts GitHub PR URLs from the RESTAPIReviews HTML field. */
+function extractSpecPrUrls(reviewsHtml) {
+  const urls = [];
+  let match;
+  // Reset lastIndex since HREF_REGEX has the global flag
+  HREF_REGEX.lastIndex = 0;
+  while ((match = HREF_REGEX.exec(reviewsHtml)) !== null) {
+    const url = match[1].trim().replace(/\/+$/, "");
+    if (GITHUB_PR_URL_PATTERN.test(url) && !urls.includes(url)) urls.push(url);
+  }
+  return urls;
+}
+
+/**
+ * Maps a DevOps work item into a normalized release plan object.
+ * Extracts language-specific fields, API spec data, and identity information.
+ */
 function mapReleasePlan(workItem, apiSpecMap) {
   const fields = workItem.fields || {};
   const id = workItem.id || fields["System.Id"];
@@ -144,22 +167,16 @@ function mapReleasePlan(workItem, apiSpecMap) {
   }
   const childIds = extractChildIds(workItem);
   let apiSpec = null;
-  for (const cid of childIds) {
-    const specWi = apiSpecMap[cid];
+  for (const childId of childIds) {
+    const specWi = apiSpecMap[childId];
     if (specWi) {
       const specFields = specWi.fields || {};
       let specPrUrl = (specFields["Custom.ActiveSpecPullRequestUrl"] || "").trim().replace(/\/+$/, "");
       const reviewsHtml = specFields["Custom.RESTAPIReviews"] || "";
-      const allSpecPrUrls = [];
-      const hrefRegex = /href="([^"]+)"/g;
-      let match;
-      while ((match = hrefRegex.exec(reviewsHtml)) !== null) {
-        const url = match[1].trim().replace(/\/+$/, "");
-        if (/github\.com\/.*\/pull\/\d+/.test(url) && !allSpecPrUrls.includes(url)) allSpecPrUrls.push(url);
-      }
+      const allSpecPrUrls = extractSpecPrUrls(reviewsHtml);
       if (!specPrUrl && allSpecPrUrls.length) specPrUrl = allSpecPrUrls[0];
       const previousSpecPrUrls = allSpecPrUrls.filter(u => u !== specPrUrl);
-      apiSpec = { id: cid, specPrUrl, previousSpecPrUrls, apiVersion: specFields["Custom.APISpecversion"] || "", definitionType: specFields["Custom.APISpecDefinitionType"] || "" };
+      apiSpec = { id: childId, specPrUrl, previousSpecPrUrls, apiVersion: specFields["Custom.APISpecversion"] || "", definitionType: specFields["Custom.APISpecDefinitionType"] || "" };
       break;
     }
   }
@@ -198,9 +215,8 @@ async function fetchPackageWorkItems(pkgLangPairs) {
   const uniquePkgs = [...new Set(pkgLangPairs.map(p => p.pkg))].filter(Boolean);
   if (!uniquePkgs.length) return new Map();
   const resultMap = new Map();
-  const WIQL_BATCH = 50;
-  for (let i = 0; i < uniquePkgs.length; i += WIQL_BATCH) {
-    const batch = uniquePkgs.slice(i, i + WIQL_BATCH);
+  for (let i = 0; i < uniquePkgs.length; i += WIQL_BATCH_SIZE) {
+    const batch = uniquePkgs.slice(i, i + WIQL_BATCH_SIZE);
     const conds = batch.map(p => `[Custom.Package] = '${p.replace(/'/g, "''")}'`).join(" OR ");
     const query = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = 'Release' AND [System.WorkItemType] = 'Package' AND [System.State] NOT IN ('Closed','Duplicate','Abandoned') AND (${conds}) ORDER BY [System.ChangedDate] DESC`;
     try {
@@ -231,10 +247,11 @@ async function fetchAzureSdkPackageList() {
 
 function isKnownPackage(name, page) { return name && page && page.toLowerCase().includes(name.toLowerCase()); }
 
-function isGAVersion(v) {
-  if (!v) return false;
-  const l = v.toLowerCase();
-  return !l.includes("beta") && !l.includes("alpha") && !l.includes("preview") && !l.includes("rc") && !/[-.]b\d/.test(l);
+/** Checks if a version string represents a GA (non-preview) release. */
+function isGAVersion(version) {
+  if (!version) return false;
+  const lower = version.toLowerCase();
+  return !lower.includes("beta") && !lower.includes("alpha") && !lower.includes("preview") && !lower.includes("rc") && !/[-.]b\d/.test(lower);
 }
 
 export {
@@ -248,7 +265,6 @@ export {
   API_SPEC_FIELDS,
   PACKAGE_FIELDS,
   devopsRequest,
-  devopsRequestWithHeaders,
   runWiql,
   fetchWorkItemsBatch,
   extractChildIds,

@@ -7,12 +7,17 @@ const KEYVAULT_KEY_NAME = process.env.KEYVAULT_KEY_NAME;
 const GITHUB_APP_ID = process.env.GITHUB_APP_NUMERIC_ID;
 const GITHUB_INSTALL_OWNER = process.env.GITHUB_INSTALL_OWNER;
 
-let _mintedGhToken = null;
+let cachedGhToken = null;
 
 function base64UrlEncode(buffer) {
   return (Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer)).toString("base64url");
 }
 
+/**
+ * Mints a GitHub App installation token via Azure Key Vault JWT signing.
+ * Falls back to GITHUB_PAT_RELEASE_PLAN or pre-set GH_TOKEN if minting fails.
+ * @returns {Promise<string|null>} The minted token, or null on failure
+ */
 async function mintGitHubAppToken() {
   try {
     const { DefaultAzureCredential } = await import("@azure/identity");
@@ -57,10 +62,10 @@ async function mintGitHubAppToken() {
     const tokenData = await tokenRes.json();
     if (!tokenData.token) throw new Error("GitHub token exchange returned no token.");
 
-    _mintedGhToken = tokenData.token;
-    process.env.GH_TOKEN = _mintedGhToken;
+    cachedGhToken = tokenData.token;
+    process.env.GH_TOKEN = cachedGhToken;
     console.log(`GitHub App installation token minted successfully (owner: ${GITHUB_INSTALL_OWNER}).`);
-    return _mintedGhToken;
+    return cachedGhToken;
   } catch (err) {
     console.warn(`GitHub App token minting failed: ${err.message}`);
     console.warn("Falling back to GITHUB_PAT_RELEASE_PLAN or pre-set GH_TOKEN.");
@@ -69,16 +74,19 @@ async function mintGitHubAppToken() {
 }
 
 // ── Generic HTTPS helper (for OAuth) ──────────────────────────
+const HTTPS_REQUEST_TIMEOUT_MS = 30000;
+
 function httpsReq(options, postData) {
   return new Promise((resolve, reject) => {
-    const req = https.request(options, (res) => {
+    const req = https.request({ ...options, timeout: HTTPS_REQUEST_TIMEOUT_MS }, (res) => {
       let data = "";
-      res.on("data", (c) => (data += c));
+      res.on("data", (chunk) => (data += chunk));
       res.on("end", () => {
         try { resolve({ statusCode: res.statusCode, body: JSON.parse(data) }); }
         catch { resolve({ statusCode: res.statusCode, body: data }); }
       });
     });
+    req.on("timeout", () => { req.destroy(new Error("Request timed out")); });
     req.on("error", reject);
     if (postData) req.write(postData);
     req.end();
@@ -105,12 +113,15 @@ async function getGitHubUser(token) {
   return res.statusCode === 200 ? res.body : null;
 }
 
+const ORGS_PER_PAGE = 100;
+
+/** Checks if the user is a public member of any of the specified GitHub organizations. */
 async function isMemberOfAnyOrg(token, username, orgs) {
-  const lowerOrgs = orgs.map(o => o.toLowerCase());
+  const lowerOrgs = orgs.map(org => org.toLowerCase());
   let page = 1;
   while (true) {
     const res = await httpsReq({
-      hostname: "api.github.com", path: `/users/${username}/orgs?per_page=100&page=${page}`, method: "GET",
+      hostname: "api.github.com", path: `/users/${username}/orgs?per_page=${ORGS_PER_PAGE}&page=${page}`, method: "GET",
       headers: { Authorization: `Bearer ${token}`, Accept: "application/json", "User-Agent": "release-plan-dashboard" },
     });
     console.log(`Org check page ${page}: status=${res.statusCode}, count=${Array.isArray(res.body) ? res.body.length : 0}`);
@@ -118,16 +129,18 @@ async function isMemberOfAnyOrg(token, username, orgs) {
     for (const org of res.body) {
       if (lowerOrgs.includes((org.login || "").toLowerCase())) return true;
     }
-    if (res.body.length < 100) break;
+    if (res.body.length < ORGS_PER_PAGE) break;
     page++;
   }
   return false;
 }
 
+/** Escapes HTML special characters to prevent XSS in server-rendered content. */
 function escapeHtml(str) {
   return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+/** Returns the application base URL, using localhost for dev and configured URL for production. */
 function getBaseUrl(req) {
   const host = req.hostname || req.get("host") || "";
   if (host === "localhost" || host === "127.0.0.1") {

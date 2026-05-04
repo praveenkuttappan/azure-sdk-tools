@@ -2,17 +2,41 @@ import express from "express";
 const router = express.Router();
 
 import { cache, evictOldest, CACHE_TTL_MS, PR_DETAIL_CACHE_TTL_MS } from "../lib/cache.js";
-import { parseGitHubPrUrl, batchFetchPrStatuses, batchFetchPrDetails, batchFetchSpecProjectPaths } from "../lib/github-api.js";
+import { parseGitHubPrUrl, batchFetchPrStatuses, batchFetchPrDetails, batchFetchSpecProjectPaths, batchFetchSpecPrLabels } from "../lib/github-api.js";
 import {
   DEVOPS_ORG, DEVOPS_PROJECT, API_VERSION, LANGUAGES, LANGUAGE_DISPLAY, LANGUAGE_PACKAGE_WI,
   API_SPEC_FIELDS,
-  devopsRequest, devopsRequestWithHeaders, runWiql, fetchWorkItemsBatch,
+  devopsRequest, runWiql, fetchWorkItemsBatch,
   extractChildIds, getField, mapReleasePlan,
   fetchPackageWorkItems, fetchAzureSdkPackageList, isKnownPackage, isGAVersion,
 } from "../lib/devops-api.js";
 
+const RELEASE_PLAN_ID_FORMAT = /^[a-zA-Z0-9_-]+$/;
+const GITHUB_PR_URL_PATTERN = /github\.com\/.*\/pull\/\d+/;
+
 // ── Core data fetching and enrichment ─────────────────────────
 
+/** Builds a map of child work item ID → API Spec work item from a list of parent work items. */
+async function buildApiSpecMap(workItems) {
+  const allChildIds = [];
+  for (const workItem of workItems) allChildIds.push(...extractChildIds(workItem));
+  const apiSpecMap = {};
+  if (allChildIds.length) {
+    const uniqueChildIds = [...new Set(allChildIds)];
+    const childItems = await fetchWorkItemsBatch(uniqueChildIds, API_SPEC_FIELDS);
+    for (const child of childItems) {
+      if (getField(child, "System.WorkItemType") === "API Spec") apiSpecMap[child.id] = child;
+    }
+  }
+  return apiSpecMap;
+}
+
+/** Checks if a GitHub token is available for API calls. */
+function hasGitHubToken() {
+  return !!(process.env.GITHUB_PAT_RELEASE_PLAN || process.env.GH_TOKEN);
+}
+
+/** Fetches all active release plans from Azure DevOps, enriches with GitHub data. */
 async function fetchAllReleasePlans() {
   const wiqlQuery = `SELECT [System.Id] FROM WorkItems
     WHERE [System.TeamProject] = 'Release'
@@ -30,17 +54,7 @@ async function fetchAllReleasePlans() {
   if (!ids.length) return { plans: [], fetchedAt: new Date().toISOString() };
 
   const workItems = await fetchWorkItemsBatch(ids);
-
-  const allChildIds = [];
-  for (const wi of workItems) allChildIds.push(...extractChildIds(wi));
-  const apiSpecMap = {};
-  if (allChildIds.length) {
-    const uniqueChildIds = [...new Set(allChildIds)];
-    const childItems = await fetchWorkItemsBatch(uniqueChildIds, API_SPEC_FIELDS);
-    for (const child of childItems) {
-      if (getField(child, "System.WorkItemType") === "API Spec") apiSpecMap[child.id] = child;
-    }
-  }
+  const apiSpecMap = await buildApiSpecMap(workItems);
 
   let plans = workItems.map(wi => mapReleasePlan(wi, apiSpecMap)).filter(p => {
     const defType = (p.apiSpec && p.apiSpec.definitionType) || "";
@@ -55,92 +69,112 @@ async function fetchAllReleasePlans() {
   return { plans, fetchedAt };
 }
 
-async function enrichPlans(plans) {
-  if (process.env.GITHUB_PAT_RELEASE_PLAN || process.env.GH_TOKEN) {
-    const specPrUrls = [];
-    const specPrUrlsForPath = [];
-    for (const p of plans) {
-      const specUrl = (p.apiSpec && p.apiSpec.specPrUrl) || "";
-      if (specUrl) {
-        specPrUrls.push(specUrl);
-        if (!p.typeSpecPath) specPrUrlsForPath.push(specUrl);
+/** Enriches plans with spec PR statuses and TypeSpec project paths from GitHub. */
+async function enrichSpecPrData(plans) {
+  if (!hasGitHubToken()) {
+    plans.forEach(plan => { plan.apiReadiness = "unknown"; plan.specProjectPath = plan.typeSpecPath || ""; });
+    return;
+  }
+  const specPrUrls = [];
+  const specPrUrlsForPath = [];
+  for (const plan of plans) {
+    const specUrl = (plan.apiSpec && plan.apiSpec.specPrUrl) || "";
+    if (specUrl) {
+      specPrUrls.push(specUrl);
+      if (!plan.typeSpecPath) specPrUrlsForPath.push(specUrl);
+    }
+  }
+  const [statusMap, specPathMap, specLabelMap] = await Promise.all([
+    batchFetchPrStatuses(specPrUrls),
+    batchFetchSpecProjectPaths(specPrUrlsForPath),
+    batchFetchSpecPrLabels(specPrUrls),
+  ]);
+  for (const plan of plans) {
+    const specUrl = (plan.apiSpec && plan.apiSpec.specPrUrl) || "";
+    if (specUrl && statusMap.has(specUrl)) {
+      const status = statusMap.get(specUrl);
+      plan.apiReadiness = status === "merged" ? "completed" : status === "open" ? "pending" : status || "unknown";
+    } else { plan.apiReadiness = "unknown"; }
+    if (specUrl && specPathMap.has(specUrl)) {
+      const derivedPath = specPathMap.get(specUrl);
+      if (derivedPath) plan.specProjectPath = derivedPath;
+    }
+    if (!plan.specProjectPath) plan.specProjectPath = plan.typeSpecPath || "";
+    if (specUrl && specLabelMap.has(specUrl)) {
+      plan.specPrLabels = specLabelMap.get(specUrl);
+    }
+  }
+}
+
+/** Enriches plans with package version, API review status, and namespace approval from DevOps. */
+async function enrichPackageData(plans) {
+  const pkgLangPairs = [];
+  for (const plan of plans) {
+    for (const [displayLang, langData] of Object.entries(plan.languages || {})) {
+      if (langData.packageName) pkgLangPairs.push({ pkg: langData.packageName, lang: LANGUAGE_PACKAGE_WI[displayLang] || displayLang });
+    }
+  }
+  const [pkgMap, azureSdkPage] = await Promise.all([fetchPackageWorkItems(pkgLangPairs), fetchAzureSdkPackageList()]);
+  for (const plan of plans) {
+    for (const [displayLang, langData] of Object.entries(plan.languages || {})) {
+      if (!langData.packageName) continue;
+      const isReleased = (langData.releaseStatus || "").toLowerCase() === "released";
+      const key = `${langData.packageName}|${LANGUAGE_PACKAGE_WI[displayLang] || displayLang}`;
+      const pkgData = pkgMap.get(key);
+      if (pkgData) {
+        langData.pkgVersion = pkgData.version;
+        if (!isReleased) {
+          langData.namespaceApproval = pkgData.namespaceApproval;
+          if (isGAVersion(pkgData.version)) langData.apiReviewStatus = pkgData.apiReviewStatus;
+        }
+      }
+      langData.isNewPackage = !isKnownPackage(langData.packageName, azureSdkPage);
+    }
+  }
+}
+
+/** Enriches plans with SDK PR statuses from GitHub and caches results. */
+async function enrichSdkPrStatuses(plans) {
+  if (!hasGitHubToken()) return;
+  const sdkPrUrls = [];
+  for (const plan of plans) {
+    for (const [, langData] of Object.entries(plan.languages || {})) {
+      if (langData.sdkPrUrl) sdkPrUrls.push(langData.sdkPrUrl);
+    }
+  }
+  const uniqueSdkPrUrls = [...new Set(sdkPrUrls.filter(Boolean))];
+  if (!uniqueSdkPrUrls.length) return;
+
+  console.log(`Fetching SDK PR statuses for ${uniqueSdkPrUrls.length} unique PRs...`);
+  const statusMap = await batchFetchPrStatuses(uniqueSdkPrUrls);
+  const now = Date.now();
+  for (const plan of plans) {
+    for (const [, langData] of Object.entries(plan.languages || {})) {
+      if (!langData.sdkPrUrl) continue;
+      const status = statusMap.get(langData.sdkPrUrl);
+      if (status) {
+        langData.sdkPrGitHubStatus = status;
+        cache.prStatuses.set(langData.sdkPrUrl, { data: status, updatedAt: now });
       }
     }
-    const [statusMap, specPathMap] = await Promise.all([
-      batchFetchPrStatuses(specPrUrls),
-      batchFetchSpecProjectPaths(specPrUrlsForPath),
-    ]);
-    for (const p of plans) {
-      const specUrl = (p.apiSpec && p.apiSpec.specPrUrl) || "";
-      if (specUrl && statusMap.has(specUrl)) {
-        const st = statusMap.get(specUrl);
-        p.apiReadiness = st === "merged" ? "completed" : st === "open" ? "pending" : st || "unknown";
-      } else { p.apiReadiness = "unknown"; }
-      if (specUrl && specPathMap.has(specUrl)) { const d = specPathMap.get(specUrl); if (d) p.specProjectPath = d; }
-      if (!p.specProjectPath) p.specProjectPath = p.typeSpecPath || "";
-    }
-  } else {
-    plans.forEach(p => { p.apiReadiness = "unknown"; p.specProjectPath = p.typeSpecPath || ""; });
   }
+  evictOldest(cache.prStatuses);
+  console.log(`SDK PR statuses fetched and cached for ${uniqueSdkPrUrls.length} PRs.`);
+}
+
+/** Enriches release plans with GitHub PR data, package data, and activity timestamps. */
+async function enrichPlans(plans) {
+  await enrichSpecPrData(plans);
 
   try {
-    const pkgLangPairs = [];
-    for (const p of plans) {
-      for (const [ld, li] of Object.entries(p.languages || {})) {
-        if (li.packageName) pkgLangPairs.push({ pkg: li.packageName, lang: LANGUAGE_PACKAGE_WI[ld] || ld });
-      }
-    }
-    const [pkgMap, azureSdkPage] = await Promise.all([fetchPackageWorkItems(pkgLangPairs), fetchAzureSdkPackageList()]);
-    for (const p of plans) {
-      for (const [ld, li] of Object.entries(p.languages || {})) {
-        if (!li.packageName) continue;
-        const isReleased = (li.releaseStatus || "").toLowerCase() === "released";
-        const key = `${li.packageName}|${LANGUAGE_PACKAGE_WI[ld] || ld}`;
-        const pkgData = pkgMap.get(key);
-        if (pkgData) {
-          li.pkgVersion = pkgData.version;
-          if (!isReleased) {
-            li.namespaceApproval = pkgData.namespaceApproval;
-            if (isGAVersion(pkgData.version)) li.apiReviewStatus = pkgData.apiReviewStatus;
-          }
-        }
-        li.isNewPackage = !isKnownPackage(li.packageName, azureSdkPage);
-      }
-    }
+    await enrichPackageData(plans);
   } catch (err) { console.warn("Package enrichment error:", err.message); }
 
-  // Fetch SDK PR status only (open/merged/closed)
-  if (process.env.GITHUB_PAT_RELEASE_PLAN || process.env.GH_TOKEN) {
-    const sdkPrUrls = [];
-    for (const p of plans) {
-      for (const [, li] of Object.entries(p.languages || {})) {
-        if (li.sdkPrUrl) sdkPrUrls.push(li.sdkPrUrl);
-      }
-    }
-    const uniqueSdkPrUrls = [...new Set(sdkPrUrls.filter(Boolean))];
-    if (uniqueSdkPrUrls.length) {
-      console.log(`Fetching SDK PR statuses for ${uniqueSdkPrUrls.length} unique PRs...`);
-      const statusMap = await batchFetchPrStatuses(uniqueSdkPrUrls);
-      const now = Date.now();
-      for (const p of plans) {
-        for (const [, li] of Object.entries(p.languages || {})) {
-          if (!li.sdkPrUrl) continue;
-          const st = statusMap.get(li.sdkPrUrl);
-          if (st) {
-            li.sdkPrGitHubStatus = st;
-            cache.prStatuses.set(li.sdkPrUrl, { data: st, updatedAt: now });
-          }
-        }
-      }
-      evictOldest(cache.prStatuses);
-      console.log(`SDK PR statuses fetched and cached for ${uniqueSdkPrUrls.length} PRs.`);
-    }
-  }
+  await enrichSdkPrStatuses(plans);
 
-  // Compute lastActivity for each plan
-  for (const p of plans) {
-    let latest = p.changedDate ? new Date(p.changedDate).getTime() : 0;
-    p.lastActivity = latest ? new Date(latest).toISOString() : "";
+  for (const plan of plans) {
+    const latest = plan.changedDate ? new Date(plan.changedDate).getTime() : 0;
+    plan.lastActivity = latest ? new Date(latest).toISOString() : "";
   }
 }
 
@@ -183,7 +217,7 @@ router.get("/api/release-plans", async (req, res) => {
     const filterPlanId = req.query.releasePlan || req.query.releaseplan || "";
 
     if (filterPlanId) {
-      if (!/^[a-zA-Z0-9_-]+$/.test(filterPlanId)) {
+      if (!RELEASE_PLAN_ID_FORMAT.test(filterPlanId)) {
         return res.status(400).json({ error: "Invalid release plan ID format." });
       }
       const wiqlQuery = `SELECT [System.Id] FROM WorkItems
@@ -193,16 +227,7 @@ router.get("/api/release-plans", async (req, res) => {
       const ids = await runWiql(wiqlQuery);
       if (!ids.length) return res.json({ plans: [], notFound: filterPlanId, fetchedAt: new Date().toISOString() });
       const workItems = await fetchWorkItemsBatch(ids);
-      const allChildIds = [];
-      for (const wi of workItems) allChildIds.push(...extractChildIds(wi));
-      const apiSpecMap = {};
-      if (allChildIds.length) {
-        const uniqueChildIds = [...new Set(allChildIds)];
-        const childItems = await fetchWorkItemsBatch(uniqueChildIds, API_SPEC_FIELDS);
-        for (const child of childItems) {
-          if (getField(child, "System.WorkItemType") === "API Spec") apiSpecMap[child.id] = child;
-        }
-      }
+      const apiSpecMap = await buildApiSpecMap(workItems);
       const plans = workItems.map(wi => mapReleasePlan(wi, apiSpecMap));
       await enrichPlans(plans);
       return res.json({ plans, fetchedAt: new Date().toISOString() });
@@ -243,8 +268,8 @@ router.post("/api/refresh-plan/:id", async (req, res) => {
     const apiSpecMap = {};
     if (childIds.length) {
       const childItems = await fetchWorkItemsBatch(childIds, API_SPEC_FIELDS);
-      for (const c of childItems) {
-        if ((c.fields["System.WorkItemType"] || "") === "API Spec") apiSpecMap[c.id] = c;
+      for (const child of childItems) {
+        if ((child.fields["System.WorkItemType"] || "") === "API Spec") apiSpecMap[child.id] = child;
       }
     }
 
@@ -252,10 +277,10 @@ router.post("/api/refresh-plan/:id", async (req, res) => {
     await enrichPlans([plan]);
 
     // Invalidate PR caches for this plan's SDK PRs
-    for (const [, li] of Object.entries(plan.languages || {})) {
-      if (li.sdkPrUrl) {
-        cache.prDetails.delete(li.sdkPrUrl);
-        cache.prStatuses.delete(li.sdkPrUrl);
+    for (const [, langData] of Object.entries(plan.languages || {})) {
+      if (langData.sdkPrUrl) {
+        cache.prDetails.delete(langData.sdkPrUrl);
+        cache.prStatuses.delete(langData.sdkPrUrl);
       }
     }
 
@@ -286,7 +311,7 @@ router.get("/api/previous-sdk-prs/:id", async (req, res) => {
     do {
       const tokenParam = continuationToken ? `&continuationToken=${encodeURIComponent(continuationToken)}` : "";
       const url = `${DEVOPS_ORG}/${DEVOPS_PROJECT}/_apis/wit/workitems/${wiId}/updates?api-version=${API_VERSION}${tokenParam}`;
-      const { body: result, headers } = await devopsRequestWithHeaders(url, "GET");
+      const { body: result, headers } = await devopsRequest(url, "GET", null, { returnHeaders: true });
       const updates = result.value || [];
       for (const upd of updates) {
         if (!upd.fields) continue;
@@ -295,7 +320,7 @@ router.get("/api/previous-sdk-prs/:id", async (req, res) => {
           const change = upd.fields[fieldName];
           if (!change) continue;
           const oldVal = (change.oldValue || "").trim().replace(/\/+$/, "");
-          if (oldVal && /github\.com\/.*\/pull\/\d+/.test(oldVal)) {
+          if (oldVal && GITHUB_PR_URL_PATTERN.test(oldVal)) {
             const displayLang = LANGUAGE_DISPLAY[lang];
             if (!previousPrs[displayLang].includes(oldVal)) previousPrs[displayLang].push(oldVal);
           }
@@ -307,9 +332,9 @@ router.get("/api/previous-sdk-prs/:id", async (req, res) => {
     if (cache.releasePlans.data) {
       const plan = cache.releasePlans.data.plans.find(p => p.id === wiId);
       if (plan && plan.languages) {
-        for (const [lang, l] of Object.entries(plan.languages)) {
-          if (l.sdkPrUrl && previousPrs[lang]) {
-            previousPrs[lang] = previousPrs[lang].filter(u => u !== l.sdkPrUrl);
+        for (const [lang, langData] of Object.entries(plan.languages)) {
+          if (langData.sdkPrUrl && previousPrs[lang]) {
+            previousPrs[lang] = previousPrs[lang].filter(u => u !== langData.sdkPrUrl);
           }
         }
       }
@@ -378,15 +403,15 @@ router.post("/api/pr-details", async (req, res) => {
     if (toFetch.length) {
       const [statusMap, detailMap] = await Promise.all([batchFetchPrStatuses(toFetch), batchFetchPrDetails(toFetch)]);
       for (const url of toFetch) {
-        const d = detailMap.get(url) || null;
-        const st = statusMap.get(url) || null;
-        const r = {
-          gitHubStatus: st,
-          prDetails: d ? { mergeable: d.mergeable, mergeableState: d.mergeableState, isApproved: d.isApproved, approvedBy: d.approvedBy, failedChecks: d.failedChecks, apiViewUrl: d.apiViewUrl || "", title: d.title || "", requestedReviewers: d.requestedReviewers || [], latestComment: d.latestComment || null, updatedAt: d.updatedAt || "" } : null,
+        const details = detailMap.get(url) || null;
+        const status = statusMap.get(url) || null;
+        const entry = {
+          gitHubStatus: status,
+          prDetails: details ? { mergeable: details.mergeable, mergeableState: details.mergeableState, isApproved: details.isApproved, approvedBy: details.approvedBy, failedChecks: details.failedChecks, apiViewUrl: details.apiViewUrl || "", title: details.title || "", requestedReviewers: details.requestedReviewers || [], latestComment: details.latestComment || null, updatedAt: details.updatedAt || "" } : null,
         };
-        cache.prDetails.set(url, { data: r, updatedAt: now });
-        if (st) cache.prStatuses.set(url, { data: st, updatedAt: now });
-        result[url] = r;
+        cache.prDetails.set(url, { data: entry, updatedAt: now });
+        if (status) cache.prStatuses.set(url, { data: status, updatedAt: now });
+        result[url] = entry;
       }
       evictOldest(cache.prDetails);
       evictOldest(cache.prStatuses);

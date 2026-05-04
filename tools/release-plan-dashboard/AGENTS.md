@@ -81,7 +81,9 @@ tests/                 # Vitest test suites (9 files, 161+ tests)
   ```
 
 ### Frontend (public/app.js)
-- Vanilla JS SPA — no build step, no framework (Alpine.js migration planned)
+- Vanilla JS SPA with Alpine.js for reactive UI controls (tabs, filters, stats, modal)
+- Card rendering uses imperative innerHTML with `esc()` XSS helper
+- All click handlers use document-level event delegation (no per-card listener binding)
 - All DOM rendering uses string templates with `esc()` for XSS prevention
 - `esc()` must be used on ALL user/API data inserted into HTML
 - Data attributes must also be escaped: `data-id="${esc(value)}"`

@@ -17,8 +17,9 @@
         showContent: false,
         showStatsBar: false,
         stats: { total: 0, inprogress: 0, partial: 0, new: 0, finished: 0, mgmt: 0, data: 0 },
+        prCount: '',
         user: { name: '', isPM: false },
-        filters: { search: '', plane: '', month: '' },
+        filters: { search: '', plane: '', month: '', prLang: '', prStatus: '' },
         prFilterVisible: false,
 
         setTab(tab) {
@@ -61,7 +62,8 @@
       <span id="user-info" class="user-info" x-show="$store.app.user.name">
         <span class="user-name" x-text="$store.app.user.name"></span> <a href="/auth/logout" class="logout-link">Logout</a>
       </span>
-      <input type="text" id="search-box" placeholder="Filter by title, service, owner, package, spec PR#…" x-model.debounce.250ms="$store.app.filters.search" />
+      <label for="search-box" class="sr-only">Filter release plans</label>
+      <input type="text" id="search-box" placeholder="Filter by title, service, owner, package, spec PR#…" x-model.debounce.250ms="$store.app.filters.search" aria-label="Filter release plans" />
     </div>
   </header>
 
@@ -72,7 +74,7 @@
     <button id="btn-create-plan" class="btn-create-plan" title="How to create a release plan?">+ Create Release Plan</button>
     <div class="tab-bar-spacer"></div>
     <div id="pr-tab-filters" class="tab-bar-filters" x-show="$store.app.prFilterVisible" x-cloak>
-      <select id="pr-filter-lang">
+      <select id="pr-filter-lang" x-model="$store.app.filters.prLang">
         <option value="">All Languages</option>
         <option value=".NET">.NET</option>
         <option value="Java">Java</option>
@@ -80,12 +82,12 @@
         <option value="Python">Python</option>
         <option value="Go">Go</option>
       </select>
-      <select id="pr-filter-status">
+      <select id="pr-filter-status" x-model="$store.app.filters.prStatus">
         <option value="">All Statuses</option>
         <option value="open">Open</option>
         <option value="draft">Draft</option>
       </select>
-      <span id="pr-count" class="pr-count-label"></span>
+      <span id="pr-count" class="pr-count-label" x-data x-text="$store.app.prCount" x-cloak></span>
     </div>
     <select id="global-plane-filter" class="global-plane-filter" x-model="$store.app.filters.plane">
       <option value="">All Planes</option>
@@ -129,7 +131,7 @@
     <div class="plane-columns">
       <!-- Management Plane -->
       <div class="plane-column" id="plane-col-mgmt">
-        <h2 class="plane-heading plane-heading-mgmt">Management Plane <span id="stat-mgmt" class="plane-total"></span></h2>
+        <h2 class="plane-heading plane-heading-mgmt">Management Plane <span id="stat-mgmt" class="plane-total" x-data x-text="'(' + $store.app.stats.mgmt + ')'" x-cloak></span></h2>
 
         <section id="section-mgmt-inprogress" class="plan-section">
           <h3 class="section-header" data-target="list-mgmt-inprogress">
@@ -162,7 +164,7 @@
 
       <!-- Data Plane -->
       <div class="plane-column" id="plane-col-data">
-        <h2 class="plane-heading plane-heading-data">Data Plane <span id="stat-data" class="plane-total"></span></h2>
+        <h2 class="plane-heading plane-heading-data">Data Plane <span id="stat-data" class="plane-total" x-data x-text="'(' + $store.app.stats.data + ')'" x-cloak></span></h2>
 
         <section id="section-data-inprogress" class="plan-section">
           <h3 class="section-header" data-target="list-data-inprogress">
