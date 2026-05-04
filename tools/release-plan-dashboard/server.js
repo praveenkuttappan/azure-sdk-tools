@@ -6,8 +6,10 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
+import passport from "passport";
+import { Strategy as GitHubStrategy } from "passport-github2";
 
-import { mintGitHubAppToken, exchangeCodeForToken, getGitHubUser, isMemberOfAnyOrg, getBaseUrl } from "./lib/auth.js";
+import { mintGitHubAppToken, isMemberOfAnyOrg, getBaseUrl } from "./lib/auth.js";
 import { createRateLimiter } from "./lib/rate-limit.js";
 import { CACHE_TTL_MS } from "./lib/cache.js";
 import apiRoutes from "./routes/api.js";
@@ -60,6 +62,12 @@ app.use(session({
 }));
 app.use(express.json());
 
+// ── Passport setup ────────────────────────────────────────────
+passport.serializeUser((user, done) => done(null, user));
+passport.deserializeUser((user, done) => done(null, user));
+app.use(passport.initialize());
+app.use(passport.session());
+
 // ── Health check (unauthenticated) ────────────────────────────
 app.get("/health", (req, res) => {
   res.json({ status: "healthy", uptime: process.uptime() });
@@ -82,40 +90,51 @@ app.get("/login", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "login.html"));
 });
 
-// ── OAuth routes ──────────────────────────────────────────────
-app.get("/auth/github", (req, res) => {
-  const state = crypto.randomBytes(16).toString("hex");
-  req.session.oauthState = state;
+// ── OAuth routes (via Passport) ───────────────────────────────
+// Configure strategy dynamically on first request to resolve callbackURL at runtime
+let strategyConfigured = false;
+function ensureStrategy(req) {
+  if (strategyConfigured) return;
   const baseUrl = getBaseUrl(req);
-  const params = new URLSearchParams({
-    client_id: GITHUB_CLIENT_ID,
-    redirect_uri: `${baseUrl}/auth/github/callback`,
-    scope: "", state,
-  });
-  res.redirect(`https://github.com/login/oauth/authorize?${params}`);
+  passport.use(new GitHubStrategy({
+    clientID: GITHUB_CLIENT_ID,
+    clientSecret: GITHUB_CLIENT_SECRET,
+    callbackURL: `${baseUrl}/auth/github/callback`,
+    scope: [],
+  }, (accessToken, refreshToken, profile, done) => {
+    // Pass accessToken + profile to the callback route via the user object
+    done(null, { accessToken, profile });
+  }));
+  strategyConfigured = true;
+}
+
+app.get("/auth/github", (req, res, next) => {
+  ensureStrategy(req);
+  passport.authenticate("github")(req, res, next);
 });
 
-app.get("/auth/github/callback", async (req, res) => {
-  const { code, state } = req.query;
-  if (!code || !state || state !== req.session.oauthState)
-    return res.redirect("/login?error=Invalid+OAuth+state.");
-  delete req.session.oauthState;
-  try {
-    const token = await exchangeCodeForToken(GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, code);
-    if (!token) return res.redirect("/login?error=Failed+to+get+access+token.");
-    const user = await getGitHubUser(token);
-    if (!user) return res.redirect("/login?error=Failed+to+get+GitHub+user+info.");
-    console.log(`User authenticated: ${user.login}`);
-    const isMember = await isMemberOfAnyOrg(token, user.login, REQUIRED_ORGS);
-    if (!isMember) return res.redirect(`/login?error=You+must+be+a+public+member+of+the+Microsoft+or+Azure+GitHub+org.+Please+ensure+your+org+membership+is+set+to+Public+in+your+GitHub+profile.`);
-    req.session.user = { login: user.login, name: user.name || user.login, avatar: user.avatar_url || "" };
-    const returnTo = req.session.returnTo || "/";
-    delete req.session.returnTo;
-    res.redirect(returnTo);
-  } catch (err) {
-    console.error("OAuth error:", err);
-    res.redirect("/login?error=Authentication+failed.");
-  }
+app.get("/auth/github/callback", (req, res, next) => {
+  ensureStrategy(req);
+  passport.authenticate("github", { failureRedirect: "/login?error=Authentication+failed." })(req, res, async () => {
+    try {
+      const { accessToken, profile } = req.user;
+      const login = profile.username;
+      console.log(`User authenticated: ${login}`);
+      const isMember = await isMemberOfAnyOrg(accessToken, login, REQUIRED_ORGS);
+      if (!isMember) {
+        req.logout(() => {});
+        return res.redirect("/login?error=You+must+be+a+public+member+of+the+Microsoft+or+Azure+GitHub+org.+Please+ensure+your+org+membership+is+set+to+Public+in+your+GitHub+profile.");
+      }
+      // Store minimal user info in session (not the accessToken)
+      req.session.user = { login, name: profile.displayName || login, avatar: (profile.photos && profile.photos[0] && profile.photos[0].value) || "" };
+      const returnTo = req.session.returnTo || "/";
+      delete req.session.returnTo;
+      res.redirect(returnTo);
+    } catch (err) {
+      console.error("OAuth error:", err);
+      res.redirect("/login?error=Authentication+failed.");
+    }
+  });
 });
 
 app.get("/auth/logout", (req, res) => { req.session.destroy(() => res.redirect("/login")); });

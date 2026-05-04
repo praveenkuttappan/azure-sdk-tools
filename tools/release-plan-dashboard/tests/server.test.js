@@ -18,8 +18,6 @@ process.env.RELEASE_PLAN_DASHBOARD_PM_USERS = "pmuser1,pmuser2";
 // Mock the auth module to avoid real Key Vault / GitHub calls
 vi.mock("../lib/auth.js", () => ({
   mintGitHubAppToken: vi.fn().mockResolvedValue("mock-token"),
-  exchangeCodeForToken: vi.fn().mockResolvedValue("mock-access-token"),
-  getGitHubUser: vi.fn().mockResolvedValue({ login: "testuser", name: "Test User", avatar_url: "" }),
   isMemberOfAnyOrg: vi.fn().mockResolvedValue(true),
   escapeHtml: (str) => String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"),
   getBaseUrl: () => "http://localhost:3000",

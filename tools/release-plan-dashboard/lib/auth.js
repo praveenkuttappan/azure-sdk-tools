@@ -1,4 +1,3 @@
-import https from "node:https";
 import crypto from "node:crypto";
 
 // ── GitHub App token minting via Azure Key Vault ──────────────
@@ -73,46 +72,8 @@ async function mintGitHubAppToken() {
   }
 }
 
-// ── Generic HTTPS helper (for OAuth) ──────────────────────────
-const HTTPS_REQUEST_TIMEOUT_MS = 30000;
-
-function httpsReq(options, postData) {
-  return new Promise((resolve, reject) => {
-    const req = https.request({ ...options, timeout: HTTPS_REQUEST_TIMEOUT_MS }, (res) => {
-      let data = "";
-      res.on("data", (chunk) => (data += chunk));
-      res.on("end", () => {
-        try { resolve({ statusCode: res.statusCode, body: JSON.parse(data) }); }
-        catch { resolve({ statusCode: res.statusCode, body: data }); }
-      });
-    });
-    req.on("timeout", () => { req.destroy(new Error("Request timed out")); });
-    req.on("error", reject);
-    if (postData) req.write(postData);
-    req.end();
-  });
-}
-
-// ── OAuth helpers ─────────────────────────────────────────────
-async function exchangeCodeForToken(clientId, clientSecret, code) {
-  const postData = JSON.stringify({
-    client_id: clientId, client_secret: clientSecret, code,
-  });
-  const res = await httpsReq({
-    hostname: "github.com", path: "/login/oauth/access_token", method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json", "User-Agent": "release-plan-dashboard" },
-  }, postData);
-  return res.body && res.body.access_token ? res.body.access_token : null;
-}
-
-async function getGitHubUser(token) {
-  const res = await httpsReq({
-    hostname: "api.github.com", path: "/user", method: "GET",
-    headers: { Authorization: `Bearer ${token}`, Accept: "application/json", "User-Agent": "release-plan-dashboard" },
-  });
-  return res.statusCode === 200 ? res.body : null;
-}
-
+// ── Org membership check (custom — not handled by passport) ──
+const FETCH_TIMEOUT_MS = 30000;
 const ORGS_PER_PAGE = 100;
 
 /** Checks if the user is a public member of any of the specified GitHub organizations. */
@@ -120,16 +81,17 @@ async function isMemberOfAnyOrg(token, username, orgs) {
   const lowerOrgs = orgs.map(org => org.toLowerCase());
   let page = 1;
   while (true) {
-    const res = await httpsReq({
-      hostname: "api.github.com", path: `/users/${username}/orgs?per_page=${ORGS_PER_PAGE}&page=${page}`, method: "GET",
+    const res = await fetch(`https://api.github.com/users/${username}/orgs?per_page=${ORGS_PER_PAGE}&page=${page}`, {
       headers: { Authorization: `Bearer ${token}`, Accept: "application/json", "User-Agent": "release-plan-dashboard" },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
-    console.log(`Org check page ${page}: status=${res.statusCode}, count=${Array.isArray(res.body) ? res.body.length : 0}`);
-    if (res.statusCode !== 200 || !Array.isArray(res.body) || !res.body.length) break;
-    for (const org of res.body) {
+    const body = res.ok ? await res.json() : [];
+    console.log(`Org check page ${page}: status=${res.status}, count=${Array.isArray(body) ? body.length : 0}`);
+    if (res.status !== 200 || !Array.isArray(body) || !body.length) break;
+    for (const org of body) {
       if (lowerOrgs.includes((org.login || "").toLowerCase())) return true;
     }
-    if (res.body.length < ORGS_PER_PAGE) break;
+    if (body.length < ORGS_PER_PAGE) break;
     page++;
   }
   return false;
@@ -151,8 +113,6 @@ function getBaseUrl(req) {
 
 export {
   mintGitHubAppToken,
-  exchangeCodeForToken,
-  getGitHubUser,
   isMemberOfAnyOrg,
   escapeHtml,
   getBaseUrl,

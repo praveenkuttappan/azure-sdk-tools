@@ -732,11 +732,10 @@
     const isExpanded = !!(store().ui.expandedPlans[p.id]);
     const summaryClass = isExpanded ? "card-summary expanded" : "card-summary";
     const detailsClass = isExpanded ? "card-details open" : "card-details";
-    const chevron = isExpanded ? "&#9660;" : "&#9654;";
     return `
     <div class="${cardClass}" data-plan-id="${p.id}">
       <div class="${summaryClass}"${isExpanded ? ' data-pr-loaded="1"' : ""}>
-        <span class="card-chevron">${chevron}</span>
+        <span class="card-chevron">&#9654;</span>
         <div class="card-title">
           ${esc(p.title)} ${copilotBadge} ${sdkTypeBadge}
         </div>
@@ -848,8 +847,7 @@
       case ACTION_TYPES.MERGE:
         title = `Merge PR — ${lang}${pkg ? ` (${pkg})` : ""}`;
         body = `<p>The SDK pull request for <strong>${esc(lang)}</strong>${pkg ? ` package <code>${esc(pkg)}</code>` : ""} is approved and all checks are passing. It is ready to be merged.</p>
-          <p><a href="${esc(prUrl)}" target="_blank" rel="noopener">Open the PR on GitHub</a> and merge it, or use the ${agentLink}:</p>
-          <div class="guide-prompt"><code>Merge ${esc(lang)} SDK pull request ${esc(prUrl)}</code></div>`;
+          <p><a href="${esc(prUrl)}" target="_blank" rel="noopener">Open the PR on GitHub</a> and merge it.</p>`;
         break;
       case ACTION_TYPES.LINK_PR:
         title = `Link SDK PR — ${lang}${pkg ? ` (${pkg})` : ""}`;
@@ -2305,7 +2303,7 @@
         } else if (st === "draft") {
           html += `<div class="action-required-section" style="margin-top:10px;"><h4>⚡ Action Required</h4><div class="action-from-label">Action required from: <strong>${serviceTeamLabel}</strong></div><div class="action-item"><strong>Mark as ready for review:</strong> This PR is in draft status. Mark it as ready for review when the SDK changes are complete.</div></div>`;
         } else if (d.isApproved && st === "open") {
-          html += `<div class="action-required-section" style="margin-top:10px;"><h4>⚡ Action Required</h4><div class="action-from-label">Action required from: <strong>${serviceTeamLabel}</strong></div><div class="action-item"><strong>Merge the SDK pull request:</strong> This PR has been approved by the SDK team. <a href="${esc(pr.prUrl)}" target="_blank" rel="noopener">Open the PR on GitHub</a> and merge it, or use the <a href="https://aka.ms/azsdk/agent" target="_blank" rel="noopener">Azure SDK Tools agent</a>:<div class="action-prompt"><code>Merge ${esc(pr.language)} SDK pull request ${esc(pr.prUrl)}</code></div></div></div>`;
+          html += `<div class="action-required-section" style="margin-top:10px;"><h4>⚡ Action Required</h4><div class="action-from-label">Action required from: <strong>${serviceTeamLabel}</strong></div><div class="action-item"><strong>Merge the SDK pull request:</strong> This PR has been approved by the SDK team. <a href="${esc(pr.prUrl)}" target="_blank" rel="noopener">Open the PR on GitHub</a> and merge it.</div></div>`;
         }
       }
       // Latest comment
