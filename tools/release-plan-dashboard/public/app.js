@@ -22,7 +22,13 @@
 
   let refreshCountdown = AUTO_REFRESH_INTERVAL;
   let countdownTimer = null;
-  let allPlans = [];
+
+  // Canonical data — stored in Alpine store for reactivity.
+  // These getters/setters provide convenient access from imperative code.
+  function getPlans() { return store().plans; }
+  function setPlans(plans) { store().plans = plans; }
+  function getPrs() { return store().prs; }
+  function setPrs(prs) { store().prs = prs; }
 
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => document.querySelectorAll(sel);
@@ -165,10 +171,10 @@
       }
 
       store().loading = false;
-      allPlans = data.plans || [];
+      setPlans(data.plans || []);
 
       // Populate month filter dropdown from available release months
-      populateMonthFilter(allPlans);
+      populateMonthFilter(getPlans());
 
       // Apply URL filter param if present
       const urlFilter = params.get("filter") || "";
@@ -182,8 +188,8 @@
         store().filters.month = urlMonth;
       }
 
-      render(allPlans);
-      if (currentUserIsPM) renderPMView(allPlans);
+      render(getPlans());
+      if (currentUserIsPM) renderPMView(getPlans());
       updateTimestamp(data.fetchedAt);
 
       // Restore expanded cards after render
@@ -223,7 +229,7 @@
       }
 
       // Initialize PR tab with progressive status loading
-      progressiveLoadPRStatuses(allPlans);
+      progressiveLoadPRStatuses(getPlans());
     } catch (err) {
       store().error = err.message;
     } finally {
@@ -605,41 +611,17 @@
     const mgmtSplit = splitByState(mgmt);
     const dataSplit = splitByState(data);
 
-    renderList("list-mgmt-inprogress", mgmtSplit.inProgress);
-    renderList("list-mgmt-partial", mgmtSplit.partial);
-    renderList("list-mgmt-new", mgmtSplit.newItems);
-    renderList("list-mgmt-finished", mgmtSplit.finished);
-
-    renderList("list-data-inprogress", dataSplit.inProgress);
-    renderList("list-data-partial", dataSplit.partial);
-    renderList("list-data-new", dataSplit.newItems);
-    renderList("list-data-finished", dataSplit.finished);
-
-    updateCount("section-mgmt-inprogress", mgmtSplit.inProgress.length);
-    updateCount("section-mgmt-partial", mgmtSplit.partial.length);
-    updateCount("section-mgmt-new", mgmtSplit.newItems.length);
-    updateCount("section-mgmt-finished", mgmtSplit.finished.length);
-
-    updateCount("section-data-inprogress", dataSplit.inProgress.length);
-    updateCount("section-data-partial", dataSplit.partial.length);
-    updateCount("section-data-new", dataSplit.newItems.length);
-    updateCount("section-data-finished", dataSplit.finished.length);
-
-    // Hide empty sections when filtering; show all when not filtering
-    const sectionCounts = {
-      "section-mgmt-inprogress": mgmtSplit.inProgress.length,
-      "section-mgmt-partial": mgmtSplit.partial.length,
-      "section-mgmt-new": mgmtSplit.newItems.length,
-      "section-mgmt-finished": mgmtSplit.finished.length,
-      "section-data-inprogress": dataSplit.inProgress.length,
-      "section-data-partial": dataSplit.partial.length,
-      "section-data-new": dataSplit.newItems.length,
-      "section-data-finished": dataSplit.finished.length,
-    };
-    for (const [id, count] of Object.entries(sectionCounts)) {
-      const sec = document.getElementById(id);
-      if (sec) sec.style.display = (isFiltering && count === 0) ? "none" : "";
-    }
+    // Populate store sections for reactive rendering
+    const sec = store().sections;
+    sec.mgmtInprogress = mgmtSplit.inProgress;
+    sec.mgmtPartial = mgmtSplit.partial;
+    sec.mgmtNew = mgmtSplit.newItems;
+    sec.mgmtFinished = mgmtSplit.finished;
+    sec.dataInprogress = dataSplit.inProgress;
+    sec.dataPartial = dataSplit.partial;
+    sec.dataNew = dataSplit.newItems;
+    sec.dataFinished = dataSplit.finished;
+    store().isFiltering = isFiltering;
 
     // Hide plane columns based on global plane filter
     const mgmtCol = document.getElementById("plane-col-mgmt");
@@ -676,17 +658,6 @@
     s.showContent = true;
   }
 
-  function renderList(containerId, plans) {
-    const container = document.getElementById(containerId);
-    if (!plans.length) {
-      container.innerHTML =
-        '<p style="padding:8px;color:#605e5c;font-size:.88rem;">No items.</p>';
-      return;
-    }
-    container.innerHTML = plans.map(cardHTML).join("");
-    storePlanDataOnCards(container, plans);
-  }
-
   /** Refresh a single plan card when the refresh button is clicked. */
   async function handlePlanRefresh(btn) {
     const planId = btn.dataset.planId;
@@ -697,28 +668,10 @@
       const resp = await fetch(`/api/refresh-plan/${planId}`, { method: "POST" });
       const data = await resp.json();
       if (data.plan) {
-        const idx = allPlans.findIndex(p => p.id === data.plan.id);
-        if (idx >= 0) allPlans[idx] = data.plan;
-        const card = btn.closest(".plan-card");
-        if (card) {
-          const wasOpen = card.querySelector(".card-details.open");
-          const tmp = document.createElement("div");
-          tmp.innerHTML = cardHTML(data.plan);
-          const newCard = tmp.firstElementChild;
-          card.replaceWith(newCard);
-          storePlanDataOnCards(newCard, allPlans);
-          if (wasOpen) {
-            const summary = newCard.querySelector(".card-summary");
-            const details = newCard.querySelector(".card-details");
-            if (summary && details) {
-              details.classList.add("open");
-              summary.classList.add("expanded");
-              summary.dataset.prLoaded = "1";
-              lazyLoadPrDetails(details, newCard);
-              lazyLoadPreviousSdkPrs(details, planId);
-            }
-          }
-        }
+        const idx = getPlans().findIndex(p => p.id === data.plan.id);
+        if (idx >= 0) getPlans()[idx] = data.plan;
+        // Re-render triggers Alpine x-for update with new section arrays
+        render(getPlans());
       }
     } catch (err) {
       console.error("Refresh plan error:", err);
@@ -728,23 +681,7 @@
     }
   }
 
-  /** Store plan data references on card elements for lazy-load recomputation. */
-  function storePlanDataOnCards(container, plans) {
-    const cards = container.classList && container.classList.contains("plan-card")
-      ? [container]
-      : [...container.querySelectorAll(".plan-card")];
-    cards.forEach((cardEl) => {
-      const planId = parseInt(cardEl.dataset.planId, 10);
-      const plan = plans.find(p => p.id === planId);
-      if (plan) cardEl._planData = plan;
-    });
-  }
 
-  function updateCount(sectionId, count) {
-    const sec = document.getElementById(sectionId);
-    const span = sec.querySelector(".section-count");
-    span.textContent = `(${count})`;
-  }
 
   function shortDate(iso) {
     if (!iso) return "";
@@ -792,10 +729,14 @@
     const dupHTML = p._duplicateOf
       ? `<span class="badge badge-duplicate">⚠️ Duplicate of ${esc(String(p._duplicateOf))}</span>`
       : "";
+    const isExpanded = !!(store().ui.expandedPlans[p.id]);
+    const summaryClass = isExpanded ? "card-summary expanded" : "card-summary";
+    const detailsClass = isExpanded ? "card-details open" : "card-details";
+    const chevron = isExpanded ? "&#9660;" : "&#9654;";
     return `
     <div class="${cardClass}" data-plan-id="${p.id}">
-      <div class="card-summary">
-        <span class="card-chevron">&#9654;</span>
+      <div class="${summaryClass}"${isExpanded ? ' data-pr-loaded="1"' : ""}>
+        <span class="card-chevron">${chevron}</span>
         <div class="card-title">
           ${esc(p.title)} ${copilotBadge} ${sdkTypeBadge}
         </div>
@@ -809,7 +750,7 @@
         <button class="plan-share-btn" data-plan-id="${esc(String(p.releasePlanId || p.id))}" title="Share this release plan">&#x1F517;</button>
         <button class="plan-refresh-btn" data-plan-id="${esc(String(p.id))}" title="Refresh this release plan">&#x21bb;</button>
       </div>
-      <div class="card-details">${detailHTML(p, { showPmAction })}</div>
+      <div class="${detailsClass}">${detailHTML(p, { showPmAction })}</div>
     </div>`;
   }
 
@@ -1510,7 +1451,8 @@
       if (!res.ok) return;
       const data = await res.json();
       const details = data.details || {};
-      const plan = cardEl && cardEl._planData;
+      const planId = cardEl && parseInt(cardEl.dataset.planId, 10);
+      const plan = planId && getPlans().find(p => p.id === planId);
 
       for (const link of prLinks) {
         const info = details[link.href];
@@ -1737,17 +1679,20 @@
     if (!target) return;
     const section = header.parentElement;
     const caret = header.querySelector(".caret");
-    const isCollapsed = section.classList.contains("collapsed");
+    const ui = store().ui;
+    const isCollapsed = !!ui.collapsedSections[targetId];
     if (isCollapsed) {
       target.style.display = "";
       target.removeAttribute("hidden");
       section.classList.remove("collapsed");
       if (caret) caret.innerHTML = "&#9660;";
+      delete ui.collapsedSections[targetId];
     } else {
       target.style.display = "none";
       target.setAttribute("hidden", "");
       section.classList.add("collapsed");
       if (caret) caret.innerHTML = "&#9654;";
+      ui.collapsedSections[targetId] = true;
     }
   }
 
@@ -1801,14 +1746,19 @@
     const productToggle = e.target.closest(".product-toggle");
     if (productToggle) {
       e.stopPropagation();
+      const card = productToggle.closest(".plan-card");
+      const planId = card && card.dataset.planId;
       const details = productToggle.nextElementSibling;
       const caret = productToggle.querySelector(".product-caret");
-      if (details.style.display === "none") {
-        details.style.display = "";
-        if (caret) caret.innerHTML = "&#9660;";
-      } else {
+      const ui = store().ui;
+      if (planId && ui.expandedProduct[planId]) {
         details.style.display = "none";
         if (caret) caret.innerHTML = "&#9654;";
+        delete ui.expandedProduct[planId];
+      } else {
+        details.style.display = "";
+        if (caret) caret.innerHTML = "&#9660;";
+        if (planId) ui.expandedProduct[planId] = true;
       }
       return;
     }
@@ -1817,14 +1767,19 @@
     const sdkToggle = e.target.closest(".sdk-toggle");
     if (sdkToggle) {
       e.stopPropagation();
+      const card = sdkToggle.closest(".plan-card");
+      const planId = card && card.dataset.planId;
       const content = sdkToggle.nextElementSibling;
       const caret = sdkToggle.querySelector(".sdk-caret");
-      if (content.style.display === "none") {
-        content.style.display = "";
-        if (caret) caret.innerHTML = "&#9660;";
-      } else {
+      const ui = store().ui;
+      if (planId && ui.expandedSdk[planId]) {
         content.style.display = "none";
         if (caret) caret.innerHTML = "&#9654;";
+        delete ui.expandedSdk[planId];
+      } else {
+        content.style.display = "";
+        if (caret) caret.innerHTML = "&#9660;";
+        if (planId) ui.expandedSdk[planId] = true;
       }
       return;
     }
@@ -1832,15 +1787,24 @@
     // Release plan card expand/collapse (lazy-loads PR details on first open)
     const cardSummary = e.target.closest(".card-summary");
     if (cardSummary) {
+      const card = cardSummary.closest(".plan-card");
+      const planId = card && card.dataset.planId;
       const details = cardSummary.nextElementSibling;
-      const opening = !details.classList.contains("open");
-      details.classList.toggle("open");
-      cardSummary.classList.toggle("expanded");
-      if (opening && !cardSummary.dataset.prLoaded) {
-        cardSummary.dataset.prLoaded = "1";
-        const card = cardSummary.closest(".plan-card");
-        lazyLoadPrDetails(details, card);
-        if (card && card.dataset.planId) lazyLoadPreviousSdkPrs(details, card.dataset.planId);
+      const ui = store().ui;
+      const wasExpanded = planId && ui.expandedPlans[planId];
+      if (wasExpanded) {
+        details.classList.remove("open");
+        cardSummary.classList.remove("expanded");
+        if (planId) delete ui.expandedPlans[planId];
+      } else {
+        details.classList.add("open");
+        cardSummary.classList.add("expanded");
+        if (planId) ui.expandedPlans[planId] = true;
+        if (planId && !ui.loadedDetails[planId]) {
+          ui.loadedDetails[planId] = true;
+          lazyLoadPrDetails(details, card);
+          lazyLoadPreviousSdkPrs(details, planId);
+        }
       }
       return;
     }
@@ -1848,14 +1812,23 @@
     // PR tab card expand/collapse (lazy-loads PR details on first open)
     const prSummary = e.target.closest(".pr-card-summary");
     if (prSummary) {
+      const prCard = prSummary.closest(".pr-card");
+      const prUrl = prCard && prCard.dataset.prUrl;
       const details = prSummary.nextElementSibling;
-      const opening = !details.classList.contains("open");
-      details.classList.toggle("open");
-      prSummary.classList.toggle("expanded");
-      if (opening && !prSummary.dataset.prLoaded) {
-        prSummary.dataset.prLoaded = "1";
-        const card = prSummary.closest(".pr-card");
-        lazyLoadPrCardDetails(card);
+      const ui = store().ui;
+      const wasExpanded = prUrl && ui.expandedPrs[prUrl];
+      if (wasExpanded) {
+        details.classList.remove("open");
+        prSummary.classList.remove("expanded");
+        if (prUrl) delete ui.expandedPrs[prUrl];
+      } else {
+        details.classList.add("open");
+        prSummary.classList.add("expanded");
+        if (prUrl) ui.expandedPrs[prUrl] = true;
+        if (!prSummary.dataset.prLoaded) {
+          prSummary.dataset.prLoaded = "1";
+          lazyLoadPrCardDetails(prCard);
+        }
       }
       return;
     }
@@ -1877,28 +1850,29 @@
       const _prLang = store().filters.prLang;
       const _prStatus = store().filters.prStatus;
       // Skip re-render if plans not loaded yet
-      if (!allPlans.length) return;
+      if (!getPlans().length) return;
       // Debounce render to avoid excessive re-renders
       clearTimeout(searchTimeout);
       searchTimeout = setTimeout(() => {
-        render(allPlans);
-        if (currentUserIsPM) renderPMView(allPlans);
+        render(getPlans());
+        if (currentUserIsPM) renderPMView(getPlans());
         renderFilteredPRs();
         syncFiltersToUrl();
         // If filter looks like a plan ID and no results found locally, try server lookup
         const filter = store().filters.search.trim();
         if (/^\d+$/.test(filter)) {
-          const found = allPlans.some(p => String(p.releasePlanId) === filter || String(p.id) === filter);
+          const found = getPlans().some(p => String(p.releasePlanId) === filter || String(p.id) === filter);
           if (!found) {
             fetch(`/api/release-plans?releasePlan=${encodeURIComponent(filter)}`)
               .then(res => res.ok ? res.json() : null)
               .then(data => {
                 if (data && data.plans && data.plans.length) {
+                  const plans = getPlans();
                   for (const plan of data.plans) {
-                    if (!allPlans.some(p => p.id === plan.id)) allPlans.push(plan);
+                    if (!plans.some(p => p.id === plan.id)) plans.push(plan);
                   }
-                  render(allPlans);
-                  progressiveLoadPRStatuses(allPlans);
+                  render(getPlans());
+                  progressiveLoadPRStatuses(getPlans());
                 }
               })
               .catch(() => {});
@@ -2076,7 +2050,6 @@
       return;
     }
     el.innerHTML = plans.map(p => cardHTML(p, { showPmAction: true })).join("");
-    storePlanDataOnCards(el, plans);
   }
 
   // ══════════════════════════════════════════════════════════════
@@ -2086,7 +2059,6 @@
   // ══════════════════════════════════════════════════════════════
   // ── SDK Pull Requests Tab ─────────────────────────────────────
   // ══════════════════════════════════════════════════════════════
-  let allPRs = [];
   let prExpandedUrls = new Set();
   let prLoadGeneration = 0; // increments on each load to cancel stale runs
 
@@ -2144,7 +2116,7 @@
   async function progressiveLoadPRStatuses(plans) {
     const gen = ++prLoadGeneration;
     const candidates = extractCandidatePRs(plans);
-    allPRs = [];
+    setPrs([]);
 
     const prLoading = document.getElementById("pr-loading");
     const prList = document.getElementById("pr-list");
@@ -2192,7 +2164,7 @@
         c.prStatus = st;
         const stLower = st.toLowerCase();
         if (stLower === "open" || stLower === "draft") {
-          allPRs.push(c);
+          getPrs().push(c);
           needsRender = true;
         }
       }
@@ -2210,7 +2182,7 @@
       if (!c._statusLoaded) {
         const stLower = (c.prStatus || "").toLowerCase();
         if (stLower === "open" || stLower === "draft") {
-          allPRs.push(c);
+          getPrs().push(c);
         }
       }
     }
@@ -2354,8 +2326,9 @@
       if (card && card.dataset.prUrl) prExpandedUrls.add(card.dataset.prUrl);
     });
 
-    const filtered = filterPRs(allPRs);
-    store().prCount = `${filtered.length} of ${allPRs.length} PRs`;
+    const allPrs = getPrs();
+    const filtered = filterPRs(allPrs);
+    store().prCount = `${filtered.length} of ${allPrs.length} PRs`;
 
     const container = document.getElementById("pr-list");
     if (!filtered.length) {
@@ -2389,7 +2362,7 @@
     const detailsEl = cardEl.querySelector(".pr-card-details");
     if (!detailsEl) return;
 
-    const pr = allPRs.find(p => p.prUrl === prUrl);
+    const pr = getPrs().find(p => p.prUrl === prUrl);
     if (!pr) return;
 
     // If prDetails already loaded (from a previous expand), render directly
@@ -2442,6 +2415,20 @@
       detailsEl.innerHTML = '<div class="pr-detail-loading" style="color:var(--red);">Error loading details.</div>';
     }
   }
+
+  // ── Expose functions for Alpine templates ──────────────────
+  // These are called from x-html / x-bind in index.html templates
+  window.dashHelpers = {
+    cardHTML,
+    detailHTML,
+    prCardHTML,
+    prDetailHTML,
+    computeCurrentStep,
+    isPastDue,
+    isPartiallyReleased,
+    esc,
+    contrastTextColor,
+  };
 
   // ── Init ────────────────────────────────────────────────────
   fetchPlans();

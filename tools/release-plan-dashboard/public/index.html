@@ -22,6 +22,27 @@
         filters: { search: '', plane: '', month: '', prLang: '', prStatus: '' },
         prFilterVisible: false,
 
+        // UI state — expansion/collapse keyed by ID (survives reactive re-renders)
+        ui: {
+          expandedPlans: {},    // { [planId]: true }
+          expandedPrs: {},      // { [prUrl]: true }
+          loadedDetails: {},    // { [planId]: true } — PR details fetched
+          collapsedSections: {},// { [sectionId]: true }
+          expandedProduct: {},  // { [planId]: true }
+          expandedSdk: {},      // { [planId]: true }
+        },
+
+        // Canonical data arrays — reactive so Alpine templates can iterate
+        plans: [],
+        prs: [],
+
+        // Computed sections — populated by render() for Alpine x-for iteration
+        sections: {
+          mgmtInprogress: [], mgmtPartial: [], mgmtNew: [], mgmtFinished: [],
+          dataInprogress: [], dataPartial: [], dataNew: [], dataFinished: [],
+        },
+        isFiltering: false,
+
         setTab(tab) {
           this.activeTab = tab;
           this.prFilterVisible = (tab === 'tab-sdk-prs');
@@ -133,32 +154,52 @@
       <div class="plane-column" id="plane-col-mgmt">
         <h2 class="plane-heading plane-heading-mgmt">Management Plane <span id="stat-mgmt" class="plane-total" x-data x-text="'(' + $store.app.stats.mgmt + ')'" x-cloak></span></h2>
 
-        <section id="section-mgmt-inprogress" class="plan-section">
+        <section id="section-mgmt-inprogress" class="plan-section" x-data x-show="!($store.app.isFiltering && !$store.app.sections.mgmtInprogress.length)">
           <h3 class="section-header" data-target="list-mgmt-inprogress">
-            <span class="caret">&#9660;</span> In Progress <span class="section-count"></span>
+            <span class="caret">&#9660;</span> In Progress <span class="section-count" x-text="'(' + $store.app.sections.mgmtInprogress.length + ')'"></span>
           </h3>
-          <div id="list-mgmt-inprogress" class="plan-list"></div>
+          <div id="list-mgmt-inprogress" class="plan-list">
+            <template x-for="plan in $store.app.sections.mgmtInprogress" :key="plan.id">
+              <div x-html="window.dashHelpers.cardHTML(plan)"></div>
+            </template>
+            <p x-show="!$store.app.sections.mgmtInprogress.length" style="padding:8px;color:#605e5c;font-size:.88rem;">No items.</p>
+          </div>
         </section>
 
-        <section id="section-mgmt-partial" class="plan-section">
+        <section id="section-mgmt-partial" class="plan-section" x-data x-show="!($store.app.isFiltering && !$store.app.sections.mgmtPartial.length)">
           <h3 class="section-header" data-target="list-mgmt-partial">
-            <span class="caret">&#9660;</span> Partially Released <span class="section-count"></span>
+            <span class="caret">&#9660;</span> Partially Released <span class="section-count" x-text="'(' + $store.app.sections.mgmtPartial.length + ')'"></span>
           </h3>
-          <div id="list-mgmt-partial" class="plan-list"></div>
+          <div id="list-mgmt-partial" class="plan-list">
+            <template x-for="plan in $store.app.sections.mgmtPartial" :key="plan.id">
+              <div x-html="window.dashHelpers.cardHTML(plan)"></div>
+            </template>
+            <p x-show="!$store.app.sections.mgmtPartial.length" style="padding:8px;color:#605e5c;font-size:.88rem;">No items.</p>
+          </div>
         </section>
 
-        <section id="section-mgmt-new" class="plan-section">
+        <section id="section-mgmt-new" class="plan-section" x-data x-show="!($store.app.isFiltering && !$store.app.sections.mgmtNew.length)">
           <h3 class="section-header" data-target="list-mgmt-new">
-            <span class="caret">&#9660;</span> New / Not Started <span class="section-count"></span>
+            <span class="caret">&#9660;</span> New / Not Started <span class="section-count" x-text="'(' + $store.app.sections.mgmtNew.length + ')'"></span>
           </h3>
-          <div id="list-mgmt-new" class="plan-list"></div>
+          <div id="list-mgmt-new" class="plan-list">
+            <template x-for="plan in $store.app.sections.mgmtNew" :key="plan.id">
+              <div x-html="window.dashHelpers.cardHTML(plan)"></div>
+            </template>
+            <p x-show="!$store.app.sections.mgmtNew.length" style="padding:8px;color:#605e5c;font-size:.88rem;">No items.</p>
+          </div>
         </section>
 
-        <section id="section-mgmt-finished" class="plan-section collapsed">
+        <section id="section-mgmt-finished" class="plan-section" x-data :class="{ collapsed: !$store.app.sections.mgmtFinished.length }" x-show="!($store.app.isFiltering && !$store.app.sections.mgmtFinished.length)">
           <h3 class="section-header" data-target="list-mgmt-finished">
-            <span class="caret">&#9654;</span> Finished in last 2 months <span class="section-count"></span>
+            <span class="caret">&#9654;</span> Finished in last 2 months <span class="section-count" x-text="'(' + $store.app.sections.mgmtFinished.length + ')'"></span>
           </h3>
-          <div id="list-mgmt-finished" class="plan-list" hidden></div>
+          <div id="list-mgmt-finished" class="plan-list" hidden>
+            <template x-for="plan in $store.app.sections.mgmtFinished" :key="plan.id">
+              <div x-html="window.dashHelpers.cardHTML(plan)"></div>
+            </template>
+            <p x-show="!$store.app.sections.mgmtFinished.length" style="padding:8px;color:#605e5c;font-size:.88rem;">No items.</p>
+          </div>
         </section>
       </div>
 
@@ -166,32 +207,52 @@
       <div class="plane-column" id="plane-col-data">
         <h2 class="plane-heading plane-heading-data">Data Plane <span id="stat-data" class="plane-total" x-data x-text="'(' + $store.app.stats.data + ')'" x-cloak></span></h2>
 
-        <section id="section-data-inprogress" class="plan-section">
+        <section id="section-data-inprogress" class="plan-section" x-data x-show="!($store.app.isFiltering && !$store.app.sections.dataInprogress.length)">
           <h3 class="section-header" data-target="list-data-inprogress">
-            <span class="caret">&#9660;</span> In Progress <span class="section-count"></span>
+            <span class="caret">&#9660;</span> In Progress <span class="section-count" x-text="'(' + $store.app.sections.dataInprogress.length + ')'"></span>
           </h3>
-          <div id="list-data-inprogress" class="plan-list"></div>
+          <div id="list-data-inprogress" class="plan-list">
+            <template x-for="plan in $store.app.sections.dataInprogress" :key="plan.id">
+              <div x-html="window.dashHelpers.cardHTML(plan)"></div>
+            </template>
+            <p x-show="!$store.app.sections.dataInprogress.length" style="padding:8px;color:#605e5c;font-size:.88rem;">No items.</p>
+          </div>
         </section>
 
-        <section id="section-data-partial" class="plan-section">
+        <section id="section-data-partial" class="plan-section" x-data x-show="!($store.app.isFiltering && !$store.app.sections.dataPartial.length)">
           <h3 class="section-header" data-target="list-data-partial">
-            <span class="caret">&#9660;</span> Partially Released <span class="section-count"></span>
+            <span class="caret">&#9660;</span> Partially Released <span class="section-count" x-text="'(' + $store.app.sections.dataPartial.length + ')'"></span>
           </h3>
-          <div id="list-data-partial" class="plan-list"></div>
+          <div id="list-data-partial" class="plan-list">
+            <template x-for="plan in $store.app.sections.dataPartial" :key="plan.id">
+              <div x-html="window.dashHelpers.cardHTML(plan)"></div>
+            </template>
+            <p x-show="!$store.app.sections.dataPartial.length" style="padding:8px;color:#605e5c;font-size:.88rem;">No items.</p>
+          </div>
         </section>
 
-        <section id="section-data-new" class="plan-section">
+        <section id="section-data-new" class="plan-section" x-data x-show="!($store.app.isFiltering && !$store.app.sections.dataNew.length)">
           <h3 class="section-header" data-target="list-data-new">
-            <span class="caret">&#9660;</span> New / Not Started <span class="section-count"></span>
+            <span class="caret">&#9660;</span> New / Not Started <span class="section-count" x-text="'(' + $store.app.sections.dataNew.length + ')'"></span>
           </h3>
-          <div id="list-data-new" class="plan-list"></div>
+          <div id="list-data-new" class="plan-list">
+            <template x-for="plan in $store.app.sections.dataNew" :key="plan.id">
+              <div x-html="window.dashHelpers.cardHTML(plan)"></div>
+            </template>
+            <p x-show="!$store.app.sections.dataNew.length" style="padding:8px;color:#605e5c;font-size:.88rem;">No items.</p>
+          </div>
         </section>
 
-        <section id="section-data-finished" class="plan-section collapsed">
+        <section id="section-data-finished" class="plan-section" x-data :class="{ collapsed: !$store.app.sections.dataFinished.length }" x-show="!($store.app.isFiltering && !$store.app.sections.dataFinished.length)">
           <h3 class="section-header" data-target="list-data-finished">
-            <span class="caret">&#9654;</span> Finished in last 2 months <span class="section-count"></span>
+            <span class="caret">&#9654;</span> Finished in last 2 months <span class="section-count" x-text="'(' + $store.app.sections.dataFinished.length + ')'"></span>
           </h3>
-          <div id="list-data-finished" class="plan-list" hidden></div>
+          <div id="list-data-finished" class="plan-list" hidden>
+            <template x-for="plan in $store.app.sections.dataFinished" :key="plan.id">
+              <div x-html="window.dashHelpers.cardHTML(plan)"></div>
+            </template>
+            <p x-show="!$store.app.sections.dataFinished.length" style="padding:8px;color:#605e5c;font-size:.88rem;">No items.</p>
+          </div>
         </section>
       </div>
     </div>
