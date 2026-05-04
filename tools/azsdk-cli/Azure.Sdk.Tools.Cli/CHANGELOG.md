@@ -1,14 +1,59 @@
 # Release History
 
-## 0.6.8 (Unreleased)
+## 0.6.12 (2026-05-04)
+
+### Other Changes
+
+- Resolve npm exec binaries directly from node_modules for NpmOptions when `.npmrc` is in user context
+
+## 0.6.11 (2026-05-01)
 
 ### Features Added
 
-### Breaking Changes
+- Added `AZSDK_COPILOT_CLI_PATH` environment variable to provide a custom path to the Copilot CLI executable (`copilot`/`copilot.exe`) for the GitHub Copilot SDK when the bundled binary is unavailable in standalone builds.
 
 ### Bugs Fixed
 
+- Fixed misleading "No feedback items to process" error when Copilot CLI is missing. Now surfaces the actual error with installation instructions and env var workaround.
+- Introduced `CopilotCliUnavailableException` to distinguish Copilot CLI issues from other failures across all copilot-dependent tools.
+
 ### Other Changes
+
+- Bumped `GitHub.Copilot.SDK` from 0.1.32 to 0.2.2.
+- Audit reads data from the cache to reduce GitHub API use
+
+## 0.6.10 (2026-04-27)
+
+### Features Added
+
+- Added Rust language support for `setup`, `generate`, `build`, and `pack` tools.
+- Added `azsdk_get_kpi_attestation_status` MCP tool to check KPI attestation status for a release plan given product ID and lifecycle.
+- Added CODEOWNERS Audit command (CLI only) that brings data model to a valid state.
+- Added optional package version argument for `azsdk release-plan update-release-status` CLI.
+
+### Other Changes
+
+- Surface APIView link in `azsdk_release_sdk` when APIView approval is missing
+
+### Bugs Fixed
+
+- Release plan ID and work item ID in `azsdk_get_release_plan` were being confused by agent. Reordered arguments and updated description to enforce release plan ID as main argument to provide. 
+
+## 0.6.9 (2026-04-16)
+
+### Features Added
+
+- Added MCP tool for updating the CODEOWNERS cache
+
+### Other Changes
+
+- Made spec PR optional parameter for both `azsdk_create_release_plan` and `azsdk_get_release_plan`
+
+## 0.6.8 (2026-04-15)
+
+### Features Added
+
+- Added CODEOWNERS validation for paths, useful for release and PR checks
 
 ## 0.6.7 (2026-04-13)
 
