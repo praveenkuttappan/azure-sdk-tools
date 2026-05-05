@@ -17,7 +17,7 @@ function createRateLimiter({ windowMs = 60 * 1000, maxRequests = 30 } = {}) {
   cleanupInterval.unref();
 
   return function rateLimiter(req, res, next) {
-    const key = (req.session && req.session.user && req.session.user.login) || req.ip || "anon";
+    const key = (req.headers && req.headers["x-ms-client-principal-id"]) || (req.headers && req.headers["x-ms-client-principal-name"]) || req.ip || "anon";
     const now = Date.now();
     const timestamps = (hits.get(key) || []).filter(t => now - t < windowMs);
 
