@@ -129,7 +129,9 @@ app.get("/auth/github/callback", (req, res, next) => {
       req.session.user = { login, name: profile.displayName || login, avatar: (profile.photos && profile.photos[0] && profile.photos[0].value) || "" };
       const returnTo = req.session.returnTo || "/";
       delete req.session.returnTo;
-      res.redirect(returnTo);
+      // Prevent open redirect — only allow relative paths
+      const safeReturnTo = (returnTo.startsWith("/") && !returnTo.startsWith("//")) ? returnTo : "/";
+      res.redirect(safeReturnTo);
     } catch (err) {
       console.error("OAuth error:", err);
       res.redirect("/login?error=Authentication+failed.");

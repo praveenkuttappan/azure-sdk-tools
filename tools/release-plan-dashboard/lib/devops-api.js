@@ -71,6 +71,7 @@ async function devopsRequest(urlPath, method, body, options) {
   const fetchOptions = {
     method: method || "GET",
     headers: { Authorization: authHeader, "Content-Type": "application/json", Accept: "application/json" },
+    signal: AbortSignal.timeout(30000),
   };
   if (body) fetchOptions.body = JSON.stringify(body);
   const response = await fetch(urlPath, fetchOptions);
