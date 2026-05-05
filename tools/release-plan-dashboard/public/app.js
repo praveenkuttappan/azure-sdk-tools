@@ -386,6 +386,14 @@
     if (allMerged) return { status: "SDK Ready To Be Released", action: serviceTeam, statusClass: "step-ready" };
     if (allApproved) return { status: "SDK To Be Merged", action: serviceTeam, statusClass: "step-pending" };
 
+    // If any PR is in draft (and not released), action is from Service Team
+    const anyDraft = langsWithPr.some(k => {
+      const st = (langs[k].sdkPrGitHubStatus || langs[k].prStatus || "").toLowerCase();
+      const rel = (langs[k].releaseStatus || "").toLowerCase();
+      return st === "draft" && !rel.includes("released") && !rel.includes("completed");
+    });
+    if (anyDraft) return { status: "SDK PR In Draft", action: serviceTeam, statusClass: "step-pending" };
+
     // Some PRs not yet approved/merged
     return { status: "SDK Review In Progress", action: "SDK PR Reviewer", statusClass: "step-inprogress" };
   }
@@ -866,12 +874,13 @@
           <div class="guide-prompt"><code>Generate ${esc(lang)} SDK${pkg ? ` for package ${esc(pkg)}` : ""} for release plan ${esc(planId)}</code></div>`;
         break;
       case ACTION_TYPES.MARK_READY:
-        title = `Mark PR Ready for Review — ${lang}${pkg ? ` (${pkg})` : ""}`;
-        body = `<p>The SDK pull request for <strong>${esc(lang)}</strong>${pkg ? ` package <code>${esc(pkg)}</code>` : ""} is currently in <strong>draft</strong> status. It needs to be marked as ready for review so that the SDK team can review and merge it.</p>
+        title = `Mark PR Ready for Review — ${lang}`;
+        body = `<p>The SDK pull request for <strong>${esc(lang)}</strong>${pkg ? ` — package <code>${esc(pkg)}</code>` : ""} is currently in <strong>draft</strong> status.</p>
+          <p><strong>Required action:</strong> Mark the pull request as ready for review on GitHub so the SDK team can begin their review.</p>
           <p><strong>Steps:</strong></p>
           <ol>
-            <li>Open the SDK pull request: <a href="${esc(prUrl)}" target="_blank" rel="noopener">${esc(prUrl)}</a></li>
-            <li>Click the <strong>"Ready for review"</strong> button to mark the pull request as ready for review.</li>
+            <li>Open the SDK pull request:<br><a href="${esc(prUrl)}" target="_blank" rel="noopener">${esc(prUrl)}</a></li>
+            <li>Click the <strong>"Ready for review"</strong> button at the bottom of the PR page.</li>
           </ol>
           <p style="font-size:.82rem;color:#605e5c;margin-top:8px;">Once marked ready, the SDK team will review the PR and provide feedback or approve it.</p>`;
         break;
@@ -918,6 +927,11 @@
             <div class="action-prompt"><code>Generate SDK for all languages from my TypeSpec project ${esc(specPath)} and link SDK pull requests to the release plan ${esc(planId)}</code></div>
           </li>
         </ol>
+      </div>`;
+    } else if (step.status === "SDK PR In Draft") {
+      actionContent = `<div class="action-item">
+        <strong>Mark SDK pull request as ready for review:</strong>
+        <p>One or more SDK pull requests are in <strong>draft</strong> status. Mark them as ready for review on GitHub so the SDK team can begin their review.</p>
       </div>`;
     } else if (step.status === "SDK Review In Progress") {
       actionContent = `<div class="action-item">
@@ -1948,6 +1962,7 @@
     const tier1Missing = [];
     const partial = [];
     const approaching = [];
+    const pastDue = [];
     const recentlyFinished = [];
 
     const now = new Date();
@@ -1976,6 +1991,12 @@
           p._pmAction = `SDK release target is <strong>${esc(p.releaseMonth)}</strong>. Ensure SDK generation and release are on track.`;
           approaching.push(p);
         }
+      }
+
+      // Past due — release month is before current month and plan not finished
+      if (isPastDue(p)) {
+        p._pmAction = `SDK release target was <strong>${esc(p.releaseMonth)}</strong>. This release plan is past due — follow up with the service team.`;
+        pastDue.push(p);
       }
 
       const isPartial = isPartiallyReleased(p);
@@ -2017,7 +2038,10 @@
       }
     }
 
+    pastDue.sort((a, b) => parseReleaseMonth(a.releaseMonth) - parseReleaseMonth(b.releaseMonth));
+
     renderPMSection("list-pm-approaching", approaching);
+    renderPMSection("list-pm-pastdue", pastDue);
     renderPMSection("list-pm-inactive", inactive);
     renderPMSection("list-pm-tier1", tier1Missing);
     renderPMSection("list-pm-partial", partial);
@@ -2026,6 +2050,7 @@
     // Update section counts
     const sections = [
       { id: "section-pm-approaching", count: approaching.length },
+      { id: "section-pm-pastdue", count: pastDue.length },
       { id: "section-pm-inactive", count: inactive.length },
       { id: "section-pm-tier1", count: tier1Missing.length },
       { id: "section-pm-partial", count: partial.length },
