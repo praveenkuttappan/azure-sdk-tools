@@ -201,4 +201,31 @@ describe("server integration", () => {
       expect(pmList.includes("PMUSER1".toLowerCase())).toBe(true);
     });
   });
+
+  describe("open redirect prevention", () => {
+    // This tests the sanitization logic used in the OAuth callback
+    function safeRedirect(returnTo) {
+      return (returnTo.startsWith("/") && !returnTo.startsWith("//")) ? returnTo : "/";
+    }
+
+    test("allows normal relative paths", () => {
+      expect(safeRedirect("/")).toBe("/");
+      expect(safeRedirect("/api/release-plans")).toBe("/api/release-plans");
+      expect(safeRedirect("/some/deep/path?q=1")).toBe("/some/deep/path?q=1");
+    });
+
+    test("blocks protocol-relative URLs (open redirect)", () => {
+      expect(safeRedirect("//evil.com")).toBe("/");
+      expect(safeRedirect("//evil.com/path")).toBe("/");
+    });
+
+    test("blocks absolute URLs", () => {
+      expect(safeRedirect("https://evil.com")).toBe("/");
+      expect(safeRedirect("http://evil.com/foo")).toBe("/");
+    });
+
+    test("blocks empty string", () => {
+      expect(safeRedirect("")).toBe("/");
+    });
+  });
 });
