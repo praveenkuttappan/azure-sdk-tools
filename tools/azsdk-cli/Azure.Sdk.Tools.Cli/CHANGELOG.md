@@ -10,6 +10,8 @@
 
 ### Other Changes
 
+- TriggerSource pipeline parameter is set when running SDK generation to open the PR as ready for review.
+
 ## 0.6.12 (2026-05-04)
 
 ### Other Changes
