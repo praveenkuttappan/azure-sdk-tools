@@ -10,6 +10,8 @@
 
 ### Other Changes
 
+- Set `TriggerSource` when running SDK generation so PRs open as ready for review.
+
 ## 0.6.12 (2026-05-04)
 
 ### Other Changes
