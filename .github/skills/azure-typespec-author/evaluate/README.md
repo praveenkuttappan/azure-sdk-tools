@@ -23,6 +23,7 @@ eval $(node scripts/setup-environment.js)
 ```
 
 This script:
+
 1. Clones `package.json` and `package-lock.json` from [azure-rest-api-specs](https://github.com/Azure/azure-rest-api-specs) into `fixtures/Microsoft.Widget/Widget/`.
 2. Runs `npm ci` in that directory.
 3. Outputs the shell command to set `FIXTURE_NODE_MODULES` for symlink usage.
@@ -75,11 +76,11 @@ vally eval --suite versioning --output-dir versioning
 
 ### Useful flags
 
-| Flag | Purpose |
-|---|---|
+| Flag                           | Purpose                                                        |
+| ------------------------------ | -------------------------------------------------------------- |
 | `--keep-executor-session-logs` | Preserve agent session logs under `--output-dir` for debugging |
-| `--verbose` | Show full agent output during the run |
-| `--workers <n>` | Run multiple stimuli in parallel (default: 5) |
+| `--verbose`                    | Show full agent output during the run                          |
+| `--workers <n>`                | Run multiple stimuli in parallel (default: 5)                  |
 
 ### Parallel run the environment
 
