@@ -538,8 +538,11 @@ describe("closed PR action logic", () => {
       l.prDetails.mergeable &&
       l.prDetails.mergeableState === "clean";
 
+    const gen = (l.generationStatus || "").trim().toLowerCase();
+    const isGenerating = gen === "in progress";
+
     if (isReleased) return null;
-    if (!hasPr) return "generate";
+    if (!hasPr) return isGenerating ? null : "generate";
     if (isClosed && !isMerged) return "link-pr";
     if (isDraft) return "mark-ready";
     if (isOpen && hasFailedChecks) return "fix-checks";
@@ -593,6 +596,40 @@ describe("closed PR action logic", () => {
       sdkPrUrl: "",
       prStatus: "",
       releaseStatus: "",
+    });
+    expect(action).toBe("generate");
+  });
+
+  test("does not return generate when generation is in progress (case-insensitive)", () => {
+    for (const status of ["In Progress", "in progress", "IN PROGRESS", " In Progress "]) {
+      const action = determineAction({
+        sdkPrUrl: "",
+        prStatus: "",
+        releaseStatus: "",
+        generationStatus: status,
+      });
+      expect(action).toBeNull();
+    }
+  });
+
+  test("returns generate for non-'In Progress' generation statuses", () => {
+    for (const status of ["Running", "InProgress", "Queued", "Not Started"]) {
+      const action = determineAction({
+        sdkPrUrl: "",
+        prStatus: "",
+        releaseStatus: "",
+        generationStatus: status,
+      });
+      expect(action).toBe("generate");
+    }
+  });
+
+  test("returns generate when generation has not started", () => {
+    const action = determineAction({
+      sdkPrUrl: "",
+      prStatus: "",
+      releaseStatus: "",
+      generationStatus: "",
     });
     expect(action).toBe("generate");
   });

@@ -632,6 +632,14 @@
     });
   }
 
+  // A language's SDK generation is actively running when its generation status
+  // is exactly "In Progress". In that state the generation pipeline is already
+  // working, so surfacing a "Generate SDK" action would be confusing.
+  function isLangGenerationInProgress(l) {
+    const gen = (l.generationStatus || "").trim().toLowerCase();
+    return gen === "in progress";
+  }
+
   // ── Language filter helpers ─────────────────────────────────
   function getLanguageFilter() {
     return store().filters.language || "";
@@ -1348,7 +1356,20 @@
       step.status === "SDK To Be Generated" ||
       step.status === "SDK Generation Failed"
     ) {
-      actionContent = `<div class="action-item">
+      // Only surface the "Generate SDKs" guidance when generation is not
+      // already running. If every pending (no-PR) language is mid-generation,
+      // showing a Generate action is confusing.
+      const langs = p.languages || {};
+      const pendingLangs = Object.keys(langs).filter((k) => {
+        if (isLangExcluded(langs[k].exclusionStatus)) return false;
+        if (isLangMissingEmitterConfig(langs[k].exclusionStatus)) return false;
+        return !langs[k].sdkPrUrl;
+      });
+      const allGenerating =
+        pendingLangs.length > 0 &&
+        pendingLangs.every((k) => isLangGenerationInProgress(langs[k]));
+      if (!allGenerating) {
+        actionContent = `<div class="action-item">
         <strong>Generate SDKs:</strong>
         <ol>
           <li>Clone the <code>azure-rest-api-specs</code> repo</li>
@@ -1358,6 +1379,7 @@
           </li>
         </ol>
       </div>`;
+      }
     } else if (step.status === "SDK PR In Draft") {
       actionContent = `<div class="action-item">
         <strong>Mark SDK pull request as ready for review:</strong>
@@ -1989,7 +2011,12 @@
                 // the release stage in the release pipeline. Link directly to it.
                 actionCell = `<a class="lang-action-btn action-btn-approve" href="${esc(l.releasePipeline)}" target="_blank" rel="noopener" title="Approve the package release in the release pipeline">Approve Release</a>`;
               } else if (!hasPr) {
-                actionCell = langActionBtn(ACTION_TYPES.GENERATE, lang, p, l);
+                // Suppress the "Generate SDK" action while the generation
+                // pipeline is already running for this language — showing it
+                // would be confusing since generation is in progress.
+                actionCell = isLangGenerationInProgress(l)
+                  ? ""
+                  : langActionBtn(ACTION_TYPES.GENERATE, lang, p, l);
               } else if (isClosed && !isMerged) {
                 actionCell = langActionBtn(ACTION_TYPES.LINK_PR, lang, p, l);
               } else if (isDraft) {

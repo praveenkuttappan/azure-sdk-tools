@@ -34,7 +34,7 @@ A single-page web dashboard for viewing Azure SDK Release Plan work items from A
 - **Pending version display** — when SDK is not yet released but the pull request is merged, shows the package version from the package work item with a "Pending" label and tooltip explaining it reflects the current version on the main branch in the SDK repo
 - **PR status labels** — Approved, Ready to merge, failed checks (with deduplication on lazy-load)
 - **Action buttons** — contextual actions per language:
-  - ⚡ **Generate SDK** — when no PR exists
+  - ⚡ **Generate SDK** — when no PR exists and generation is not already in progress
   - 🔗 **Link PR** — when PR is closed (with guidance to find/link correct PR)
   - 🔧 **Fix Checks** — when PR has failing checks
   - 🚀 **Release** — when PR is merged but not yet released

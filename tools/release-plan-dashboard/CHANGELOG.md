@@ -1,5 +1,12 @@
 # Release History
 
+## 1.0.0-dev.3
+
+### Fixed
+
+- **Generate SDK action** — No longer surfaced as an action (per-language button or "Action Required" guidance) when SDK generation status is "In Progress", avoiding confusion while the generation pipeline is already running
+- **Release In Progress state** — No action is surfaced for a language while its release pipeline is actively running (release status "Release In Progress")
+
 ## 1.0.0-dev.2
 
 ### Features Added
