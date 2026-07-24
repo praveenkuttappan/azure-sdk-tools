@@ -109,6 +109,26 @@ describe("Release approval required", () => {
   });
 });
 
+describe("Release in progress", () => {
+  test("no action is required for a language while its release runs", () => {
+    expect(appJs).toContain('relSt === "release in progress"');
+    expect(appJs).toContain('releaseStatusLower === "release in progress"');
+  });
+
+  test("status column shows a spinning badge with a details pipeline link", () => {
+    expect(appJs).toContain("release-in-progress-badge");
+    expect(appJs).toContain("Release In Progress");
+    expect(appJs).toContain(">details</a>");
+    expect(styleCss).toContain(".release-in-progress-badge");
+    expect(styleCss).toContain(".release-in-progress-icon");
+    expect(styleCss).toContain("@keyframes release-in-progress-spin");
+  });
+
+  test("release-in-progress languages are excluded from the to-release list", () => {
+    expect(appJs).toContain('rel !== "release in progress"');
+  });
+});
+
 describe("mapReleasePlan pipeline fields", () => {
   test("maps SDK generation and release pipelines per language", () => {
     const fields = {

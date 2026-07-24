@@ -1388,7 +1388,8 @@
           (st.includes("merged") || st.includes("completed")) &&
           rel !== "completed" &&
           rel !== "released" &&
-          rel !== "approval pending"
+          rel !== "approval pending" &&
+          rel !== "release in progress"
         );
       });
       const langList = toRelease.length
@@ -1979,6 +1980,10 @@
 
               if (isReleased) {
                 actionCell = "";
+              } else if (relSt === "release in progress") {
+                // Release pipeline is actively running; no action is required
+                // from the team while it completes.
+                actionCell = "";
               } else if (relSt === "approval pending" && l.releasePipeline) {
                 // Release is queued and waiting for the service team to approve
                 // the release stage in the release pipeline. Link directly to it.
@@ -2035,11 +2040,17 @@
             // prominent badge. The pipeline approval link is surfaced as an
             // "Approve Release" action in the Action Required column.
             let releaseCell = statusSpan(releaseDisplay);
-            if (
-              !exLabel &&
-              (l.releaseStatus || "").toLowerCase() === "approval pending"
-            ) {
+            const releaseStatusLower = (l.releaseStatus || "").toLowerCase();
+            if (!exLabel && releaseStatusLower === "approval pending") {
               releaseCell = `<span class="release-approval-pending-badge" title="The package release is queued and pending approval in the release pipeline"><span class="release-approval-pending-icon" aria-hidden="true">⏳</span> Pending Release Approval</span>`;
+            } else if (!exLabel && releaseStatusLower === "release in progress") {
+              // Release pipeline is actively running. Surface a spinning icon
+              // and, when available, a "details" link to the running pipeline.
+              const pipeline = l.releasePipeline || "";
+              const detailsLink = pipeline
+                ? ` (<a href="${esc(pipeline)}" target="_blank" rel="noopener" title="View the running release pipeline">details</a>)`
+                : "";
+              releaseCell = `<span class="release-in-progress-badge" title="The release pipeline is currently running"><span class="release-in-progress-icon" aria-hidden="true">🔄</span> Release In Progress</span>${detailsLink}`;
             }
 
             html += `<tr${rowClass}>

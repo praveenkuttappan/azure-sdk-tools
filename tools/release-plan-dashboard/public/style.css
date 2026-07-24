@@ -1401,6 +1401,33 @@ main {
   margin-right: 2px;
 }
 
+/* Prominent badge shown in the Release Status column when the release
+   pipeline is actively running. The icon spins to indicate progress. */
+.release-in-progress-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: #e5f1fb;
+  color: #0b5394;
+  border: 1px solid #2b88d8;
+  white-space: nowrap;
+}
+.release-in-progress-icon {
+  display: inline-block;
+  margin-right: 2px;
+  animation: release-in-progress-spin 1.4s linear infinite;
+}
+@keyframes release-in-progress-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* Feed link icons */
 .feed-icon {
   vertical-align: middle;
