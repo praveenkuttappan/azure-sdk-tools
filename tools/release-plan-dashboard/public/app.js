@@ -2048,7 +2048,7 @@
               // and, when available, a "details" link to the running pipeline.
               const pipeline = l.releasePipeline || "";
               const detailsLink = pipeline
-                ? ` (<a href="${esc(pipeline)}" target="_blank" rel="noopener" title="View the running release pipeline">details</a>)`
+                ? ` (<a href="${esc(pipeline)}" target="_blank" rel="noopener" aria-label="View the running release pipeline" title="View the running release pipeline">details</a>)`
                 : "";
               releaseCell = `<span class="release-in-progress-badge" title="The release pipeline is currently running"><span class="release-in-progress-icon" aria-hidden="true">🔄</span> Release In Progress</span>${detailsLink}`;
             }

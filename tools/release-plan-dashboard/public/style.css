@@ -1428,6 +1428,12 @@ main {
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .release-in-progress-icon {
+    animation: none;
+  }
+}
+
 /* Feed link icons */
 .feed-icon {
   vertical-align: middle;
